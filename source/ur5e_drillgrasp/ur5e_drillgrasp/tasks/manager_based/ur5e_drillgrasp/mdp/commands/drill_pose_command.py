@@ -35,13 +35,12 @@ class DrillPoseCommand(CommandTerm):
         if env_ids is None:
             env_ids = slice(None)
 
-        # Cube 位置 (-0.18, 0.11, 0.785)：桌面顶 0.75 + 半高 0.035（v20: 7cm, y 0.11）
+        # Cube 位置 (-0.18, 0.10, 0.78)：桌面顶 0.75 + 半高 0.03（v71: 7cm→6cm 同步，z 0.785→0.78）
         # （曾为 0.82，桌面 0.795 时代；未同步导致目标比实际 Cube 高 4.5cm）
         self.goal[env_ids, :3] = torch.tensor(
-            [-0.18, 0.11, 0.785],
+            [-0.16, 0.175, 0.78],
             device=self.goal.device
         )
-
 
         # 朝向：单位四元数 (1,0,0,0) = 无旋转
         self.goal[env_ids, 3:] = torch.tensor(

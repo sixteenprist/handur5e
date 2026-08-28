@@ -3,15 +3,14 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.actuators import ImplicitActuatorCfg
 
-
 DRILL_UR5E_CFG = ArticulationCfg(
 
     spawn=sim_utils.UsdFileCfg(
 
-        usd_path="/home/jiangli/zhaoyucheng/assets/drill_ur5e.usd",
-        # activate_contact_sensors=True,
-        # 提速：禁用全关节接触上报（5 个指尖传感器已注释，新系统上恒为 0）；
-        # 后续修好接触传感器/需要触觉奖励时改回 True 并恢复传感器
+        usd_path="/home/jiangli/zhaoyucheng/assets/drill_ur5e_v1.usd",
+
+        # v48: 恢复接触上报——用户要修传感器，让 env 知道"抓没抓紧"。
+        # （之前 False 因为新系统上传感器恒为 0 + 每步开销大；现在配合 env_cfg 恢复 ContactSensorCfg）
         activate_contact_sensors=False,
         collision_props=sim_utils.CollisionPropertiesCfg(
             collision_enabled=True,
@@ -87,7 +86,7 @@ DRILL_UR5E_CFG = ArticulationCfg(
 
             ],
 
-            stiffness=5.0,     # 中等刚度，ωn≈3.16 rad/s
+            stiffness=20.0,     # 中等刚度，ωn≈3.16 rad/s
             damping=0.5,       # 过阻尼 ζ≈1.58，绝不振荡
 
         ),

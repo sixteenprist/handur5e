@@ -15,6 +15,7 @@ from __future__ import annotations
 import torch
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab.utils.math import quat_apply
 
 
 # ══════════════════════════════════════════════════════════════
@@ -23,19 +24,45 @@ from isaaclab.envs import ManagerBasedRLEnv
 
 _FINGERTIP_NAMES = ["thumb4", "index4", "middle4", "ring4", "little4"]
 
-# TCP offset — base_link_1 局部坐标系 (B)，需与 env_cfg.body_offset 和 reset_events 保持一致
-_BODY_OFFSET = torch.tensor([0.03, -0.02, 0.06])  # 与 env_cfg 控制器 body_offset 一致
+# Cube 半边长 (m)（v34: 7cm→7.5cm）；rewards 也复用本常量
+_CUBE_HALF_SIZE = 0.03  # v71: 0.035→0.03（cube 7cm→6cm 同步）
+
+# TCP offset — wrist_3_link 局部坐标系 (B)，需与 env_cfg.body_offset 和 reset_events 保持一致
+_BODY_OFFSET = torch.tensor([0.0, 0.07, 0.08])  # v92: (0,0.10,0.08)→(0,0.07,0.08)——用户实测 TCP 在掌心下 7-8cm 太深（目标"掌心距顶面 3cm"时 TCP 深入 cube 内）；y 减 3cm 后掌心下 ~5cm。与 env_cfg 控制器 body_offset 一致（rewards/reset_events 复用本常量）
 
 
 # ══════════════════════════════════════════════════════════════
 # 内部工具
 # ══════════════════════════════════════════════════════════════
 
-def _robot_body_position(env: ManagerBasedRLEnv, body_name: str) -> torch.Tensor:
-    """(W) 指定 body 在世界坐标系下的位置 → (N, 3)."""
+# 缓存 body id（find_bodies 遍历 body 名，纯 Python 开销；robot 对象不变，按 (id, name) 缓存）
+# v94 性能优化：每步激活路径 ~15 次 find_bodies（obs 9 + reward 6），全部改走缓存，只首次查找。
+_body_id_cache: dict = {}
+
+
+def _get_body_id(env: ManagerBasedRLEnv, body_name: str) -> int:
+    """缓存版 body id 查找。"""
     robot: Articulation = env.scene["robot"]
-    body_ids, _ = robot.find_bodies(body_name)
-    return robot.data.body_pos_w[:, int(body_ids[0])]
+    key = (id(robot), body_name)
+    if key not in _body_id_cache:
+        ids, _ = robot.find_bodies(body_name)
+        _body_id_cache[key] = int(ids[0])
+    return _body_id_cache[key]
+
+
+def _robot_body_position(env: ManagerBasedRLEnv, body_name: str) -> torch.Tensor:
+    """(W) 指定 body 在世界坐标系下的位置 → (N, 3).
+    v85: 统一用 body_link_pos_w（link frame 原点）——与 rewards._get_palm_pos 等一致。
+    原 body_pos_w 是关节 frame（运动 link 的 frame 在关节处），位置会偏。
+    v94: find_bodies→_get_body_id（缓存）。
+    """
+    robot: Articulation = env.scene["robot"]
+    return robot.data.body_link_pos_w[:, _get_body_id(env, body_name)]
+
+
+def _palm_id(env: ManagerBasedRLEnv) -> int:
+    """手掌 base_link_1 的 body id。"""
+    return _get_body_id(env, "base_link_1")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -62,29 +89,36 @@ def palm_position(env: ManagerBasedRLEnv) -> torch.Tensor:
 
 
 def palm_orientation(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """(W) 手掌朝向（四元数 wxyz）→ (N, 4)."""
+    """(W) 手掌朝向（四元数 wxyz）→ (N, 4).
+    v85: body_quat_w→body_link_quat_w（与位置统一用 link frame）。
+    """
     robot: Articulation = env.scene["robot"]
-    palm_id = int(robot.find_bodies("base_link_1")[0][0])
-    return robot.data.body_quat_w[:, palm_id]
+    return robot.data.body_link_quat_w[:, _palm_id(env)]
 
 
 # ══════════════════════════════════════════════════════════════
 # TCP & 相对位置（世界坐标系）
 # ══════════════════════════════════════════════════════════════
 
+def _tcp_id(env: ManagerBasedRLEnv) -> int:
+    """wrist_3_link（TCP 参考点载体）的 body id。"""
+    return _get_body_id(env, "wrist_3_link")
+
+
 def tcp_position(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) TCP 在世界坐标系下的位置。
-    TCP = palm_pos(W) + R_palm * _BODY_OFFSET(B).
+    TCP = wrist_3_link_pos(W) + R_wrist3 * _BODY_OFFSET(B).
+    v83b: 用 body_link_pos_w/body_link_quat_w（link frame 原点）——用户实测 offset 是相对
+    wrist_3_link 的 link 原点；原 body_pos_w 是关节 frame（wrist_3_joint 在 link 根部），
+    两者不同导致 TCP 观测偏移。与 rewards._get_tcp_pos 一致。
     """
     robot: Articulation = env.scene["robot"]
-    palm_id = int(robot.find_bodies("base_link_1")[0][0])
-    palm_pos_w = robot.data.body_pos_w[:, palm_id]
-    palm_quat_w = robot.data.body_quat_w[:, palm_id]
+    tcp_body_pos_w = robot.data.body_link_pos_w[:, _tcp_id(env)]
+    tcp_body_quat_w = robot.data.body_link_quat_w[:, _tcp_id(env)]
 
-    from isaaclab.utils.math import quat_apply
-    offset_b = _BODY_OFFSET.to(palm_pos_w.device).unsqueeze(0).expand(palm_pos_w.shape[0], -1)  # (N, 3)
-    offset_w = quat_apply(palm_quat_w, offset_b)
-    return palm_pos_w + offset_w                                  # (N, 3)
+    offset_b = _BODY_OFFSET.to(tcp_body_pos_w.device).unsqueeze(0).expand(tcp_body_pos_w.shape[0], -1)  # (N, 3)
+    offset_w = quat_apply(tcp_body_quat_w, offset_b)
+    return tcp_body_pos_w + offset_w                              # (N, 3)
 
 
 def tcp_to_cube(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -107,11 +141,12 @@ def fingertip_to_cube_surface(env: ManagerBasedRLEnv) -> torch.Tensor:
     """
     robot: Articulation = env.scene["robot"]
     cube_pos = env.scene["cube_obj"].data.root_pos_w               # (N, 3)
-    half = 0.035  # Cube 半边长（v20: 6cm→7cm）
+    half = _CUBE_HALF_SIZE
     vecs = []
     for name in _FINGERTIP_NAMES:
-        body_ids, _ = robot.find_bodies(name)
-        tip_pos = robot.data.body_pos_w[:, int(body_ids[0])]       # (N, 3)
+        # v85: body_pos_w→body_link_pos_w（link frame，与 rewards._get_fingertip_pos 一致）
+        # v94: find_bodies→_get_body_id（缓存）
+        tip_pos = robot.data.body_link_pos_w[:, _get_body_id(env, name)]  # (N, 3)
         to_center = cube_pos - tip_pos                              # (N, 3) 指尖→质心
         dist = torch.norm(to_center, dim=-1, keepdim=True)          # (N, 1)
         to_surface = to_center * torch.clamp((dist - half) / (dist + 1e-8), min=0.0)  # (N, 3) 指尖→表面
@@ -165,32 +200,3 @@ def last_action(env: ManagerBasedRLEnv) -> torch.Tensor:
 def generated_commands(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
     """获取指定命令的当前目标值。"""
     return env.command_manager.get_command(command_name)
-
-
-# ══════════════════════════════════════════════════════════════
-# 指尖绝对位置（内部用，非策略观测）
-# ══════════════════════════════════════════════════════════════
-
-def thumb_tip_position(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """(W) 拇指尖位置。"""
-    return _robot_body_position(env, "thumb4")
-
-
-def index_tip_position(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """(W) 食指尖位置。"""
-    return _robot_body_position(env, "index4")
-
-
-def middle_tip_position(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """(W) 中指尖位置。"""
-    return _robot_body_position(env, "middle4")
-
-
-def ring_tip_position(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """(W) 无名指尖位置。"""
-    return _robot_body_position(env, "ring4")
-
-
-def little_tip_position(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """(W) 小指尖位置。"""
-    return _robot_body_position(env, "little4")

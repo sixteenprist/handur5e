@@ -15,8 +15,46 @@ Episode 终止条件。
 from __future__ import annotations
 
 import torch
-from isaaclab.assets import RigidObject
+from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import ManagerBasedRLEnv
+
+from .observations import _get_body_id
+
+
+# ══════════════════════════════════════════════════════════════
+# 公共内部工具（供 success 系列复用，数值与原内联实现完全一致）
+# ══════════════════════════════════════════════════════════════
+
+def _palm_cube_dist(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """(W) 手掌 base_link_1 → Cube 质心欧氏距离 → (N,)."""
+    robot: Articulation = env.scene["robot"]
+    obj: RigidObject = env.scene["cube_obj"]
+    # v85: body_pos_w→body_link_pos_w（link frame 统一）
+    palm = robot.data.body_link_pos_w[:, _get_body_id(env, "base_link_1")]
+    return torch.norm(palm - obj.data.root_pos_w, dim=-1)
+
+def _cube_stable(env: ManagerBasedRLEnv, lin_vel_threshold: float, ang_vel_threshold: float) -> torch.Tensor:
+    """Cube 线/角速度均低于阈值（稳定）→ (N,) bool。"""
+    obj: RigidObject = env.scene["cube_obj"]
+    lin_vel = torch.norm(obj.data.root_lin_vel_w, dim=-1)
+    ang_vel = torch.norm(obj.data.root_ang_vel_w, dim=-1)
+    return (lin_vel < lin_vel_threshold) & (ang_vel < ang_vel_threshold)
+
+
+def _finger_flex_term(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """5 组手指关节绝对均值之和（关节 6..26 按 4 个一组）。"""
+    robot: Articulation = env.scene["robot"]
+    joint_pos = robot.data.joint_pos
+    return sum(
+        torch.mean(torch.abs(joint_pos[:, s:e]), dim=1)
+        for s, e in [(6, 10), (10, 14), (14, 18), (18, 22), (22, 26)]
+    )
+
+
+def _ensure_obj_init_pos(env: ManagerBasedRLEnv, pos: torch.Tensor) -> None:
+    """缓存 Cube 初始位置（首次按全量，供出界判断）。"""
+    if not hasattr(env, "_obj_init_pos_w") or env._obj_init_pos_w.shape != pos.shape:
+        env._obj_init_pos_w = pos.clone()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -35,75 +73,32 @@ def drill_dropped(env: ManagerBasedRLEnv) -> torch.Tensor:
 
 def success_stage1(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Stage 1: (W) 手掌-Cube < 0.10m + 稳定。"""
-    from isaaclab.assets import Articulation
-    robot: Articulation = env.scene["robot"]
-    obj: RigidObject = env.scene["cube_obj"]
-
-    palm = robot.data.body_pos_w[:, robot.find_bodies("base_link_1")[0][0]]  # (W)
-    cube_pos = obj.data.root_pos_w                                              # (W)
-    palm_dist = torch.norm(palm - cube_pos, dim=-1)
-    lin_vel = torch.norm(obj.data.root_lin_vel_w, dim=-1)
-    ang_vel = torch.norm(obj.data.root_ang_vel_w, dim=-1)
-
-    return (palm_dist < 0.10) & (lin_vel < 0.05) & (ang_vel < 0.10)
+    return (_palm_cube_dist(env) < 0.10) & _cube_stable(env, 0.05, 0.10)
 
 
 def success_stage2(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Stage 2 终止: (W) 手掌-Cube < 0.06m + 稳定。比 Stage 1 更严，防秒终止。"""
-    from isaaclab.assets import Articulation
-    robot: Articulation = env.scene["robot"]
-    obj: RigidObject = env.scene["cube_obj"]
-
-    palm = robot.data.body_pos_w[:, robot.find_bodies("base_link_1")[0][0]]  # (W)
-    cube_pos = obj.data.root_pos_w                                              # (W)
-    palm_dist = torch.norm(palm - cube_pos, dim=-1)
-    lin_vel = torch.norm(obj.data.root_lin_vel_w, dim=-1)
-    ang_vel = torch.norm(obj.data.root_ang_vel_w, dim=-1)
-
-    return (palm_dist < 0.06) & (lin_vel < 0.05) & (ang_vel < 0.10)
+    return (_palm_cube_dist(env) < 0.06) & _cube_stable(env, 0.05, 0.10)
 
 
 def success(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Stage 2: (W) 手掌-Cube < 0.15m + 手指 flex > 0.5 + 稳定。"""
-    from isaaclab.assets import Articulation
-    robot: Articulation = env.scene["robot"]
-    obj: RigidObject = env.scene["cube_obj"]
-
-    palm = robot.data.body_pos_w[:, robot.find_bodies("base_link_1")[0][0]]  # (W)
-    cube_pos = obj.data.root_pos_w                                              # (W)
-    palm_dist = torch.norm(palm - cube_pos, dim=-1)
-    lin_vel = torch.norm(obj.data.root_lin_vel_w, dim=-1)
-    ang_vel = torch.norm(obj.data.root_ang_vel_w, dim=-1)
-
-    joint_pos = robot.data.joint_pos
-    finger_flex = sum(
-        torch.mean(torch.abs(joint_pos[:, s:e]), dim=1)
-        for s, e in [(6,10), (10,14), (14,18), (18,22), (22,26)]
+    return (
+        (_palm_cube_dist(env) < 0.15)
+        & (_finger_flex_term(env) > 0.5)
+        & _cube_stable(env, 0.05, 0.10)
     )
-
-    return (palm_dist < 0.15) & (finger_flex > 0.5) & (lin_vel < 0.05) & (ang_vel < 0.10)
 
 
 def success_stage3(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Stage 3: (W) 抓稳 + Cube Z > 1.35m。"""
-    from isaaclab.assets import Articulation
-    robot: Articulation = env.scene["robot"]
     obj: RigidObject = env.scene["cube_obj"]
-
-    palm = robot.data.body_pos_w[:, robot.find_bodies("base_link_1")[0][0]]  # (W)
-    cube_pos = obj.data.root_pos_w                                              # (W)
-    palm_dist = torch.norm(palm - cube_pos, dim=-1)
-    cube_z = obj.data.root_pos_w[:, 2]                                         # (W) Z
-    lin_vel = torch.norm(obj.data.root_lin_vel_w, dim=-1)
-    ang_vel = torch.norm(obj.data.root_ang_vel_w, dim=-1)
-
-    joint_pos = robot.data.joint_pos
-    finger_flex = sum(
-        torch.mean(torch.abs(joint_pos[:, s:e]), dim=1)
-        for s, e in [(6,10), (10,14), (14,18), (18,22), (22,26)]
+    return (
+        (_palm_cube_dist(env) < 0.15)
+        & (_finger_flex_term(env) > 0.5)
+        & (obj.data.root_pos_w[:, 2] > 1.35)
+        & _cube_stable(env, 0.05, 0.10)
     )
-
-    return (palm_dist < 0.15) & (finger_flex > 0.5) & (cube_z > 1.35) & (lin_vel < 0.05) & (ang_vel < 0.10)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -130,8 +125,7 @@ def object_out_of_bounds(
     obj: RigidObject = env.scene["cube_obj"]
     pos = obj.data.root_pos_w                                                # (N,3)
 
-    if not hasattr(env, "_obj_init_pos_w") or env._obj_init_pos_w.shape != pos.shape:
-        env._obj_init_pos_w = pos.clone()
+    _ensure_obj_init_pos(env, pos)
     init = env._obj_init_pos_w                                                # (N,3)
 
     if use_xy_only:
@@ -148,10 +142,8 @@ def cache_object_init_pos_on_reset(
     """缓存物体初始位置，供 object_out_of_bounds 使用。"""
     obj: RigidObject = env.scene["cube_obj"]
     pos = obj.data.root_pos_w
-    if not hasattr(env, "_obj_init_pos_w") or env._obj_init_pos_w.shape != pos.shape:
-        env._obj_init_pos_w = pos.clone()
-    else:
-        env._obj_init_pos_w[env_ids] = pos[env_ids].clone()
+    _ensure_obj_init_pos(env, pos)
+    env._obj_init_pos_w[env_ids] = pos[env_ids].clone()
 
 
 def object_away_from_robot(
@@ -159,7 +151,6 @@ def object_away_from_robot(
     threshold: float = 2.0,
 ) -> torch.Tensor:
     """物体距离机器人 root 过远即终止。"""
-    from isaaclab.assets import Articulation
     robot: Articulation = env.scene["robot"]
     obj: RigidObject = env.scene["cube_obj"]
 
