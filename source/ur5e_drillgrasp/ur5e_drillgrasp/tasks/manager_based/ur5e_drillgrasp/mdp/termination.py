@@ -33,6 +33,7 @@ def _palm_cube_dist(env: ManagerBasedRLEnv) -> torch.Tensor:
     palm = robot.data.body_link_pos_w[:, _get_body_id(env, "base_link_1")]
     return torch.norm(palm - obj.data.root_pos_w, dim=-1)
 
+
 def _cube_stable(env: ManagerBasedRLEnv, lin_vel_threshold: float, ang_vel_threshold: float) -> torch.Tensor:
     """Cube 线/角速度均低于阈值（稳定）→ (N,) bool。"""
     obj: RigidObject = env.scene["cube_obj"]
@@ -62,9 +63,27 @@ def _ensure_obj_init_pos(env: ManagerBasedRLEnv, pos: torch.Tensor) -> None:
 # ══════════════════════════════════════════════════════════════
 
 def drill_dropped(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """(W) Cube Z < 0.70m 视为掉落。"""
+    """(W) Cube Z < 0.0m 视为掉落。"""
     obj: RigidObject = env.scene["cube_obj"]
-    return obj.data.root_pos_w[:, 2] < 0.70
+    return obj.data.root_pos_w[:, 2] < 0.0
+
+
+def debug_explosion(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """[临时调试] 检测数值爆炸/NaN 导致的隐藏 reset（不经过正常终止条件）。
+
+    熵爆 32.8 + noise std 1.61 时代，物理瞬态可能把关节位置/速度推到爆表或 NaN，
+    这类 env 会被底层强制 reset，但不出现在 time_out/drill_drop 等正常终止条件里，
+    导致 Mean episode length(57步) 与 Episode_Termination/time_out(98.44%) 矛盾。
+    本项用于排查：触发即证明"隐藏 reset = 数值爆炸"。排查完删除。
+    """
+    robot: Articulation = env.scene["robot"]
+    obj: RigidObject = env.scene["cube_obj"]
+    jp_nan = torch.isnan(robot.data.joint_pos).any(dim=-1)
+    jv_nan = torch.isnan(robot.data.joint_vel).any(dim=-1)
+    jp_exceed = (torch.abs(robot.data.joint_pos) > 5.0).any(dim=-1)
+    jv_exceed = (torch.abs(robot.data.joint_vel) > 20.0).any(dim=-1)
+    cube_nan = torch.isnan(obj.data.root_pos_w).any(dim=-1)
+    return jp_nan | jv_nan | jp_exceed | jv_exceed | cube_nan
 
 
 # ══════════════════════════════════════════════════════════════

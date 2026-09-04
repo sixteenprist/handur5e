@@ -42,6 +42,11 @@ class GroupedHandAction(ActionTerm):
         self._n_thumb = len(self._thumb_ids)
         self._n_per_finger = 4  # 每指4关节
 
+        # v99: 全部手指关节 id 缓存（scale=0 锁定分支只写手指关节，不碰手臂 6 关节的 position target）
+        self._finger_joint_ids = list(self._thumb_ids)
+        for _lst in (self._index_ids, self._middle_ids, self._ring_ids, self._little_ids):
+            self._finger_joint_ids.extend(_lst)
+
         self._action_dim = self._n_thumb + 4 + 4   # 拇指 + (食+中) + (无+小)
         self._raw_actions = torch.zeros(env.num_envs, self._action_dim, device=env.device)
         self._processed_actions = torch.zeros(env.num_envs, self._action_dim, device=env.device)
@@ -99,6 +104,26 @@ class GroupedHandAction(ActionTerm):
     def apply_actions(self):
         """将策略动作映射为手指关节位置目标（相对位置控制，关节空间 rad）。"""
         actions = self._raw_actions * self.cfg.scale  # 关节空间，单位 rad
+
+        # v99: scale=0（Stage 1 锁定）→ 绝对位置控制：target 固定为初始关节位置，只写手指关节。
+        #   原实现 target=joint_pos+0 跟踪当前位置，重力拉下垂后 target 跟着走，
+        #   stiffness×(target-pos)=0 → 无恢复力 → 手指自然弯曲（play 观察）。
+        #   固定为 default_joint_pos（=init_state.joint_pos，与 reset 后初始姿态一致）后
+        #   stiffness 持续产生恢复力对抗重力，保持伸直。
+        #   只写手指关节（joint_ids）：手臂 6 关节由 OSC 的 effort target 独立控制，
+        #   本 term 只负责手指，不污染手臂的 position target 缓冲区。
+        if self.cfg.scale == 0.0:
+            dj = self._asset.data.default_joint_pos
+            if dj.dim() == 1:
+                target = dj[self._finger_joint_ids].unsqueeze(0).expand(
+                    self._asset.data.joint_pos.shape[0], -1
+                )
+            else:
+                target = dj[:, self._finger_joint_ids]
+            self._asset.set_joint_position_target(target, joint_ids=self._finger_joint_ids)
+            self._processed_actions = actions
+            return
+
         thumb_act = actions[:, :self._n_thumb]
         idx_mid_act = actions[:, self._n_thumb:self._n_thumb + 4]
         rng_lit_act = actions[:, -4:]
@@ -123,8 +148,16 @@ class GroupedHandAction(ActionTerm):
             if len(joint_ids) > 0:
                 full_action[:, joint_ids] = rng_lit_act[:, i:i+1]
 
-        # v66: 相对位置控制目标 = 当前 + 动作增量；再做每步变化限幅（对齐 SoftHand max_drive_torque_delta）
-        target = self._asset.data.joint_pos + full_action
+        # [2026-09-02] 绝对位置控制目标 = 伸直位 + 动作：零动作 target=伸直位，stiffness 持续拉回伸直，
+        #   消除"相对控制 joint_pos+action 下零动作 target 跟随当前位置 → 手指自由下垂"的问题。
+        #   （手臂关节 full_action=0 → target=default_joint_pos，手臂 stiffness=0 无物理作用）
+        dj = self._asset.data.default_joint_pos
+        if dj.dim() == 1:
+            base = dj.unsqueeze(0).expand(actions.shape[0], -1)
+        else:
+            base = dj
+        target = base + full_action
+
         if self.cfg.max_delta > 0.0:
             # 未初始化的 env 用当前 target 作为起点（首步不限制）
             first = ~self._target_initialized
@@ -157,10 +190,10 @@ class GroupedHandActionCfg(ActionTermCfg):
     asset_name: str = "robot"
     scale: float = 0.05
     bias: float = 0.0  # 手部动作偏置：>0 = 倾向于闭合，降低探索难度
-    # v66: 每步目标位置最大变化量 (rad/step)，对齐 SoftHand max_drive_torque_delta=0.003 精神。
-    # 0.05 = scale 满量程（raw±1 → ±0.05 rad）——正常抓取动作不受限，只拦 std 膨胀时的大跳。
-    # 设 0 关闭限幅（回退旧行为）。
-    max_delta: float = 0.05
+    # [2026-09-02] 0.03→1.5：绝对控制 scale=1.5 后，0.03 远小于单步动作满量程（1.5 rad），
+    #   截断高斯动作 → KL/std 失控 → 熵爆（v70 教训：max_delta 必须 ≥ scale 满量程）。
+    #   1.5 = scale，不截断正常单步动作，仍拦跨多步极端跳变。Stage 1（scale=0）不走此分支，无影响。
+    max_delta: float = 1.0
     # v66: raw action 裁剪范围（对齐 SoftHand clip）。None=不裁剪；1.0=限制 raw∈[-1,1]。
     # 与 max_delta 双保险：clip 拦 raw 绝对值，max_delta 拦每步目标变化。
     clip_range: float | None = 1.0

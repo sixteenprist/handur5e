@@ -28,7 +28,7 @@ _FINGERTIP_NAMES = ["thumb4", "index4", "middle4", "ring4", "little4"]
 _CUBE_HALF_SIZE = 0.03  # v71: 0.035→0.03（cube 7cm→6cm 同步）
 
 # TCP offset — wrist_3_link 局部坐标系 (B)，需与 env_cfg.body_offset 和 reset_events 保持一致
-_BODY_OFFSET = torch.tensor([0.0, 0.07, 0.08])  # v92: (0,0.10,0.08)→(0,0.07,0.08)——用户实测 TCP 在掌心下 7-8cm 太深（目标"掌心距顶面 3cm"时 TCP 深入 cube 内）；y 减 3cm 后掌心下 ~5cm。与 env_cfg 控制器 body_offset 一致（rewards/reset_events 复用本常量）
+_BODY_OFFSET = torch.tensor([0.0, 0.08, 0.11])
 
 
 # ══════════════════════════════════════════════════════════════
@@ -77,6 +77,21 @@ def object_position(env: ManagerBasedRLEnv) -> torch.Tensor:
 def object_orientation(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) Cube 朝向（四元数 wxyz）→ (N, 4)."""
     return env.scene["cube_obj"].data.root_quat_w
+
+
+def object_lin_vel(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """(W) Cube 质心线速度 → (N, 3).
+    【critic 特权观测】success_stage1 的"稳定"判定依赖 cube 线速度 (<0.10)，
+    但 actor 观测中没有速度项 → 交给 critic 做更准的价值估计。
+    """
+    return env.scene["cube_obj"].data.root_lin_vel_w
+
+
+def object_ang_vel(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """(W) Cube 角速度 → (N, 3).
+    【critic 特权观测】同上，"稳定"判定还要求角速度 < 0.20。
+    """
+    return env.scene["cube_obj"].data.root_ang_vel_w
 
 
 # ══════════════════════════════════════════════════════════════

@@ -11,7 +11,7 @@ DRILL_UR5E_CFG = ArticulationCfg(
 
         # v48: 恢复接触上报——用户要修传感器，让 env 知道"抓没抓紧"。
         # （之前 False 因为新系统上传感器恒为 0 + 每步开销大；现在配合 env_cfg 恢复 ContactSensorCfg）
-        activate_contact_sensors=False,
+        activate_contact_sensors=True,
         collision_props=sim_utils.CollisionPropertiesCfg(
             collision_enabled=True,
             contact_offset=0.002,      # 2mm 接触容差
@@ -38,11 +38,14 @@ DRILL_UR5E_CFG = ArticulationCfg(
             "wrist_2_joint":-1.5708,
             "wrist_3_joint":3.1416,         # 手掌朝下
 
-            # 拇指各关节限位方向不同，需分别设初值，避开限位边界
-            "thumb1_joint":-0.3,     # 上限0，设-0.3避开
-            "thumb2_joint":-0.3,
-            "thumb3_joint":0.3,      # 下限0，设+0.3避开
-            "thumb4_joint":0.3,      # 下限0，设+0.3避开
+            # 拇指初始位置：[用户 2026-09-01] thumb1 -30°→-10°：play 发现 -30° 时拇指朝下戳 cube，
+            #   悬停时拇指尖侵入 cube 顶面空间 → cube 被扰动 → success"稳定"条件不满足、
+            #   且拇指单侧戳无对向 → grip=0、finger_contact 无真实贴面。改平到 -10° 让拇指接近伸直。
+            #   注意 thumb3/4 下限=0，初始 0 正好贴下限边界（如需余量可调 +0.05）
+            "thumb1_joint":-0.175,   # -10°（限位 [-90°,0°] 内）
+            "thumb2_joint":0.0,      # 限位 [-60°,60°]，0° 在中间
+            "thumb3_joint":0.0,      # 下限0°
+            "thumb4_joint":0.0,      # 下限0°（用户已在 USD 里把 thumb4_hoint 改成 thumb4_joint）
             "index.*_joint":0.0,
             "middle.*_joint":0.0,
             "ring.*_joint":0.0,
@@ -86,8 +89,8 @@ DRILL_UR5E_CFG = ArticulationCfg(
 
             ],
 
-            stiffness=20.0,     # 中等刚度，ωn≈3.16 rad/s
-            damping=0.5,       # 过阻尼 ζ≈1.58，绝不振荡
+            stiffness=40.0,
+            damping=2.0,
 
         ),
 
