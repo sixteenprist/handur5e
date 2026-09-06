@@ -297,35 +297,72 @@ def reach_reward(
     # return r
 
 
+def finger_reaching_reward(
+    env: ManagerBasedRLEnv,
+    touch_std: float = 0.03,
+    dist_threshold: float = 0.15,
+    d_std: float = 0.05,
+) -> torch.Tensor:
+    """(2026-09-04) 指尖接近 cube 面奖励——密集梯度（bootstrap 用）。
+
+    与 finger_contact（纯力判据）分离：本项只奖励"指尖靠近 cube 面"，
+    宽过渡带（touch_std=3cm）提供从远到近的连续梯度，避免稀疏。
+    不奖励"贴面有力"——那由 finger_contact 的纯力 + 滞回判据负责。
+    [拆分原因] 原 touch×force 混合结构：touch 几何距离在"接近"即饱和 → 白拿底分，
+      而 force 在"接触"才激活 → "接近→接触"梯度断档。拆成"距离引导 + 力判据"两段。
+    """
+    dists = _fingertip_cube_surface_dists(env)                    # (N,5) 指尖到表面距离（已扣半边长）
+    touch = (1.0 - torch.tanh(dists / touch_std)).mean(dim=-1)    # (N,) 平均接近度 0~1
+    d = _tcp_cube_dist(env)
+    gate = torch.clamp((dist_threshold + d_std - d) / d_std, min=0.0, max=1.0)
+    return gate * touch
+
+
 def finger_contact_reward(
     env: ManagerBasedRLEnv,
-    touch_std: float = 0.04,
-    force_std: float = 0.02,
-    base: float = 0.4,
-    dist_threshold: float = 0.015,
-    d_std: float = 0.01,
+    deadzone: float = 0.005,
+    force_on: float = 0.02,
+    force_off: float = 0.01,
+    dist_threshold: float = 0.15,
+    d_std: float = 0.05,
 ) -> torch.Tensor:
-    """(v71) 正确弯曲 = 指尖贴 cube 面 × 指尖有力（结果导向，不看关节角）。
+    """(2026-09-04) 指尖接触判据——纯力 + 滞回锁存（SoftHand 风格）。
 
-    touch 密集（距离连续 → 底分），force 稀疏（接触 → 加分）：
-        score = touch × (base + (1-base) × force)
-    贴面就有 base=0.4 底分，有力升到 1.0——避免"贴面但没力"时零梯度卡死。
-    [2026-09-03] 聚合 mean → 0.7·mean + 0.3·min：纯 mean 下短手指（小指/无名指）
-      弯同样角度更容易贴面 → 可弥补长手指（食/中指）不贴面 → "短手指独弯"跨指不平衡。
-      min 短板项盯住最不贴面的那根（通常食/中指），逼它们也贴面；
-      0.3 是 v37 验证值（太高会逼长手指把关节3/4弯到极限 → 蜷缩爪）。
+    接触 = 力的硬证据，不看几何距离（杜绝"接近不接触"虚高）：
+      - deadzone：力 < deadzone 当 0（去噪）
+      - 滞回：进入 force_on（OFF→ON）、退出 force_off（ON→OFF），防力在阈值附近抖动
+      - reduction=count 归一化：接触手指数 / 5 → 0~1
     带 TCP 距离软门控（dist_threshold 内满分，dist_threshold~dist_threshold+d_std 线性过渡）。
+    接触力量级实测 0.03~0.09N，故阈值设 0.02/0.01（远小于 SoftHand 的 0.2/0.1）。
     """
     from .observations import fingertip_contact_force
-    dists = _fingertip_cube_surface_dists(env)        # (N,5) 指尖到表面距离（已扣半边长）
-    touch = 1.0 - torch.tanh(dists / touch_std)        # (N,5) 每指贴面度 0~1
-    forces = fingertip_contact_force(env)              # (N,5) N
-    force = 1.0 - torch.exp(-forces / force_std)       # (N,5) 每指有力度 0~1
-    per = touch * (base + (1.0 - base) * force)        # (N,5) 底分 + 加分
-    score = 0.5 * per.mean(dim=-1) + 0.5 * per.min(dim=-1).values   # (N,) mean 短板聚合
+    forces = fingertip_contact_force(env)                         # (N,5) N
+    forces = torch.clamp(forces - deadzone, min=0.0)              # 去噪
+
+    # 滞回锁存状态 (N,5) bool，按 env 缓存 + reset 清零
+    if not hasattr(env, "_contact_latch") or env._contact_latch.shape[0] != env.num_envs:
+        env._contact_latch = torch.zeros(env.num_envs, 5, dtype=torch.bool, device=env.device)
+    latch = env._contact_latch
+    if hasattr(env, "episode_length_buf"):
+        reset_mask = env.episode_length_buf == 0
+        if torch.any(reset_mask):
+            latch[reset_mask] = False
+
+    turn_on = forces > force_on
+    keep_on = forces > force_off
+    latch[:] = (latch & keep_on) | ((~latch) & turn_on)
+
+    contact_count = latch.float().sum(dim=-1) / 5.0               # (N,) 0~1 接触手指数占比
+    min_contact = latch.float().min(dim=-1).values                # (N,) 0/1 最不接触那指（min 短板）
+    # [2026-09-06 回退] 撤销 force_cont（接触后压紧连续分量）：连续力信号引入尖峰，效果不如纯 0/1 计数。
+    #   恢复稳定结构：数量 + 短板，0/1 计数靠 hysteresis 平滑，无连续力噪声。
+    score = 0.5 * contact_count + 0.5 * min_contact               # (N,) 数量 + 短板
+
     d = _tcp_cube_dist(env)
     gate = torch.clamp((dist_threshold + d_std - d) / d_std, min=0.0, max=1.0)
     return gate * score
+
+
 
 
 def finger_close_reward(
@@ -1022,7 +1059,18 @@ def opposition_reward(
     F_py = torch.relu(fy).sum(dim=-1)                          # 朝 +y 合力
     F_ny = torch.relu(-fy).sum(dim=-1)                         # 朝 -y 合力
     opp = torch.minimum(F_py, F_ny)                            # (N,) 仅 y 向对向
-    opp = torch.tanh(opp / scale)                              # 0→1 平滑饱和
+    # [2026-09-05] EMA 平滑：接触力每物理步抖动，scale=0.05 会放大噪声 → 对 raw 对向力做指数移动平均，
+    #   滤掉高频抖动，grip 曲线更稳。alpha=0.3（约 3~5 帧平滑，滞后可忽略）；reset 时用当前值初始化。
+    if not hasattr(env, "_grip_opp_ema") or env._grip_opp_ema.shape[0] != env.num_envs:
+        env._grip_opp_ema = opp.clone()
+    ema = env._grip_opp_ema
+    ema = 0.3 * opp + 0.7 * ema
+    if hasattr(env, "episode_length_buf"):
+        reset_mask = env.episode_length_buf == 0
+        if torch.any(reset_mask):
+            ema[reset_mask] = opp[reset_mask]
+    env._grip_opp_ema = ema
+    opp = torch.tanh(ema / scale)                              # 0→1 平滑饱和
     dist = _tcp_cube_dist(env)
     # v71: 硬门控 → 软门控（d_std 过渡带）；grip 项复用本函数做"正确抓取=力封闭"确认
     gate = torch.clamp((gate_dist + d_std - dist) / d_std, min=0.0, max=1.0)

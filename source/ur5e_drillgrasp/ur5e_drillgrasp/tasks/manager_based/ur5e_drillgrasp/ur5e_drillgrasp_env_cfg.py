@@ -408,7 +408,7 @@ class RewardsCfg:
         # [2026-09-02] ang_std 0.25→0.15：play 观察策略"抬手腕空弯"（手腕偏离 38° 拿 finger_close 分，
         #   手指离 cube 侧面变远夹不到）。0.25 太松，38° 只罚 -0.35/步，挡不住抬手腕收益。
         #   0.15（8.6°）：38° 偏离罚升到 -0.97/步，让"抬手腕换弯曲分"变成亏本买卖。
-        params={"ang_std": 0.30},
+        params={"ang_std": 0.25},
     )
     tcp_close_bonus: RewTerm = RewTerm(
         func=mdp.tcp_close_bonus_once,
@@ -416,7 +416,7 @@ class RewardsCfg:
         # v21: 4.5cm→4cm——v20 偏宽；4cm = 距 7cm cube 表面 0.5cm，真正轻触
         # [用户] bonus 8.0→5.0（撤回）：8.0 一次性尖峰在策略大量穿越 4cm 边界时密集发放，
         #   → 稀疏大奖励 → value loss 爆 28.8（952→1052 iter）→ 策略退化。回 5.0 控尖峰。
-        params={"distance_threshold": 0.040, "bonus_value": 5.0},
+        params={"distance_threshold": 0.040, "bonus_value": 2.0},
     )
     # object_distance_penalty: RewTerm = RewTerm(
     #     func=mdp.object_distance_penalty,
@@ -434,18 +434,21 @@ class RewardsCfg:
     #   （抬手腕空弯/关节3过弯/抓取时颤动），真悬停才奖励弯曲。
     finger_close: RewTerm = RewTerm(
         func=mdp.finger_close_reward,
-        weight=1.0,  # [2026-09-03 抓握阶段] 0.0→0.5→1.0：绕位完成恢复弯曲奖励；1.0 强化跨指 min 短板
-        #   （_finger_flex 0.7*min+0.3*mean）对小指无名指的弯曲驱动（抓握阶段它们仍不弯）。
-        params={"gate_std": 0.03, "max_flex": 0.6},
+        weight=0.5,  # [2026-09-05] 1.0→0.5：精简过程奖励——抓取已成型，弯曲引导退居二线，减少对 finger_contact/grip 的拉扯
+        # [2026-09-04] gate_std 0.03→0.08：弯曲应早于接触（时序：接近15cm→弯曲8cm→接触5cm→力封闭1.5cm）；
+        #   max_flex 0.5→0.6：给"贴面需要更多弯曲"留余量（有层级门控+纯力判据约束，不会过度蜷缩）。
+        params={"gate_std": 0.08, "max_flex": 0.6},
+    )
+    finger_reaching: RewTerm = RewTerm(
+        func=mdp.finger_reaching_reward,
+        weight=1.0,  # [2026-09-05] 2.0→1.0：精简过程奖励——接近引导减半，bootstrap 使命已完成，减少拉扯
+        params={"touch_std": 0.03, "dist_threshold": 0.15, "d_std": 0.05},
     )
     finger_contact: RewTerm = RewTerm(
         func=mdp.finger_contact_reward,
-        # [Stage 2 2026-09-02] 0.0→3.0：激活指尖贴面奖励，驱动手指从伸直进化到"贴面有力"。
-        # [2026-09-03 绕位阶段] 3.0→0.0：暂时清零，绕位阶段不要求贴面；门控回退到宽松值
-        #   （dist_threshold 0.15 + d_std 0.05），抓握阶段恢复 3.0 时手指有完整贴面梯度、不熵漂移。
-        # [2026-09-03 抓握阶段] 0.0→3.0：绕位完成，恢复指尖贴面奖励。
-        weight=3.0,
-        params={"touch_std": 0.04, "force_std": 0.02, "base": 0.4, "dist_threshold": 0.15, "d_std": 0.05},
+        weight=3.0,  # [2026-09-04] 纯力判据（hysteresis 滞回）：sensor 有力才算接触，杜绝"接近不接触"虚高
+        # [2026-09-04] dist_threshold 0.15→0.05：接触确认应晚于弯曲（时序：接近15→弯曲8→接触5→力封闭1.5cm）
+        params={"deadzone": 0.005, "force_on": 0.04, "force_off": 0.02, "dist_threshold": 0.05, "d_std": 0.02},
     )
     # # [2026-09-03] 定向小指/无名指掌根弯曲：切抓握后食中指已弯贴面，小指无名指仍不弯，
     # #   finger_contact 的 min 短板（0.3）梯度不足 + hand_action_mag 压弯曲成本 → 短手指弯曲收益<成本。
@@ -459,8 +462,16 @@ class RewardsCfg:
     # 正确抓取 = 力封闭（对向两面力取 min）。[Stage 2 2026-09-02] 0.0→1.0：激活力封闭奖励。
     grip: RewTerm = RewTerm(
         func=mdp.opposition_reward,
-        weight=3.0,
-        params={"gate_dist": 0.015, "scale": 0.1, "d_std": 0.01},
+        weight=3.0,  # [2026-09-03 抓握阶段] 0.0→3.0：绕位完成，恢复力封闭奖励。
+        # [2026-09-04] scale 0.5→0.1：实测指尖接触力仅 0.03~0.09N，0.5 时 tanh 几乎不响应；
+        #   0.1 让 0.1N 对向力就有 tanh(1)=0.76 分，匹配接触力量级。力方向已改 cube 局部 y（见 rewards）。
+        # [2026-09-05] scale 0.1→0.05：逼更大对向力（0.08N→tanh(1.6)=0.92，0.2~0.3N 才近满分）；
+        #   配合 rewards.opposition_reward 里的 EMA 平滑滤噪，防 scale 变小时噪声被放大。
+        # [2026-09-06] scale 0.05→0.08：治后期熵漂移（8500 崩）——0.05 时 opp≈0.06N 落在 tanh(1.2)=0.83
+        #   半饱和段（梯度 sech²≈0.28 弱）→ 奖励平台化 → 优势趋零 → 熵奖励主导 → σ 漂移崩。
+        #   0.08 让同样 opp 落到陡坡段 tanh(0.75)=0.64（梯度翻倍），满分需 opp≈0.24N，
+        #   抓取后仍有持续加压梯度；配合 stiffness 60（opp 能上 0.1N+），掉分可爬回。
+        params={"gate_dist": 0.015, "scale": 0.05, "d_std": 0.01},
     )
     # [2026-09-03] 拇指对侧奖励：引导拇指绕到四指对侧（力封闭的几何前提）。
     #   grip 是"力的稀疏确认"（拇指绕到位前恒 0，无梯度），本项给"几何密集引导"
@@ -490,7 +501,13 @@ class RewardsCfg:
     #     weight=-2.0,
     #     params={"surface_threshold": 0.02, "std": 0.01},
     # )
-
+    # [2026-09-05] 手掌压 cube 惩罚（启用）：堵"手掌撞 cube"hack。手掌 z 低于 cube 顶面(clearance 内)且
+    #   水平投影在 cube 内(xy_gate)时惩罚——正常抓取手掌在 cube 上方悬停不触发，只有"手掌撞/压穿 cube"才罚。
+    # palm_press: RewTerm = RewTerm(
+    #     func=mdp.palm_press_penalty,
+    #     weight=-2.0,
+    #     params={"clearance": 0.005, "pen_std": 0.015, "xy_gate": 0.04},
+    # )
     # ===== 物体抬升（初始 weight=0，由课程学习在 60000 步后激活）=====
     lifted: RewTerm = RewTerm(
         func=mdp.object_lifted,
