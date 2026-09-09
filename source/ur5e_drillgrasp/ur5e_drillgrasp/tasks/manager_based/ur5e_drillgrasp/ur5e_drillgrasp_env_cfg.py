@@ -75,7 +75,7 @@ class Ur5eDrillgraspSceneCfg(InteractiveSceneCfg):
                 solver_position_iteration_count=16,  # 保持 16（抓取稳定性需要，不动）
                 solver_velocity_iteration_count=0,
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.18),
             collision_props=sim_utils.CollisionPropertiesCfg(),
             visual_material=sim_utils.PreviewSurfaceCfg(
                 diffuse_color=(0.2, 0.5, 0.8)
@@ -342,7 +342,7 @@ class RewardsCfg:
     三阶段课程学习：
       Stage 1（接近）: 只有 reach + success_stage1，手指不动
       Stage 2（抓取）: 激活 finger_close + fingertip + contact_force + tcp_gated_hand
-      Stage 3（举升）: 再激活 lift + palm_height，目标举到特定高度
+      Stage 3（举升）: 再激活 弯lift + palm_height，目标举到特定高度
     """
 
     # ===== 通用 =====
@@ -412,7 +412,7 @@ class RewardsCfg:
     )
     tcp_close_bonus: RewTerm = RewTerm(
         func=mdp.tcp_close_bonus_once,
-        weight=1.0,  # 一次性奖励：TCP 首次贴近 Cube
+        weight=0.0,  # 一次性奖励：TCP 首次贴近 Cube
         # v21: 4.5cm→4cm——v20 偏宽；4cm = 距 7cm cube 表面 0.5cm，真正轻触
         # [用户] bonus 8.0→5.0（撤回）：8.0 一次性尖峰在策略大量穿越 4cm 边界时密集发放，
         #   → 稀疏大奖励 → value loss 爆 28.8（952→1052 iter）→ 策略退化。回 5.0 控尖峰。
@@ -437,8 +437,16 @@ class RewardsCfg:
         weight=0.5,  # [2026-09-05] 1.0→0.5：精简过程奖励——抓取已成型，弯曲引导退居二线，减少对 finger_contact/grip 的拉扯
         # [2026-09-04] gate_std 0.03→0.08：弯曲应早于接触（时序：接近15cm→弯曲8cm→接触5cm→力封闭1.5cm）；
         #   max_flex 0.5→0.6：给"贴面需要更多弯曲"留余量（有层级门控+纯力判据约束，不会过度蜷缩）。
-        params={"gate_std": 0.08, "max_flex": 0.6},
+        params={"gate_std": 0.08, "max_flex": 0.50},
     )
+    # # [2026-09-09] 指腹贴面 shaping：j4（指尖）≤ 0.3×j3（中段）——j3 弯、j4 不弯。
+    # #   治 play 观察到的"指尖戳 cube 而非指腹贴面"（指尖点接触面积小、摩擦差，可能是 opp 瓶颈）。
+    # #   正向 shaping（非惩罚，跳过拇指）；与 _FINGER_JOINT_WEIGHTS j4 权重清零配合。
+    # finger_ratio: RewTerm = RewTerm(
+    #     func=mdp.finger_ratio_reward,
+    #     weight=0.3,
+    #     params={"ratio_target": 0.3, "dist_threshold": 0.12},
+    # )
     finger_reaching: RewTerm = RewTerm(
         func=mdp.finger_reaching_reward,
         weight=1.0,  # [2026-09-05] 2.0→1.0：精简过程奖励——接近引导减半，bootstrap 使命已完成，减少拉扯
@@ -446,33 +454,57 @@ class RewardsCfg:
     )
     finger_contact: RewTerm = RewTerm(
         func=mdp.finger_contact_reward,
-        weight=3.0,  # [2026-09-04] 纯力判据（hysteresis 滞回）：sensor 有力才算接触，杜绝"接近不接触"虚高
-        # [2026-09-04] dist_threshold 0.15→0.05：接触确认应晚于弯曲（时序：接近15→弯曲8→接触5→力封闭1.5cm）
-        params={"deadzone": 0.005, "force_on": 0.04, "force_off": 0.02, "dist_threshold": 0.05, "d_std": 0.02},
+        weight=3.5,  # [2026-09-07 连续化实验] 二值滞回→连续力 tanh(f/0.06)+EMA：消除阈值边缘 0/1 flip-flop。
+        #   σ=0.06（工作点 0.1N 处 grad=1.28，抖动被饱和区压死）；聚合 0.8·mean+0.2·min（整体为主、短板辅助）。
+        #   [2026-09-07 失稳回退] σ 曾 0.10→value loss 0.004→0.72 尖峰（0.1N 工作点 grad=4.2 放大噪声 3 倍），
+        #   weight 4.0→3.5 补偿 σ 回调后 tanh 值回升（3.5×0.93≈3.26 分数不降）。
+        #   ⚠️ 若 value loss 仍 >0.1 或尖峰再现，立即回退二值版。
+        params={"force_std": 0.06, "dist_threshold": 0.05, "d_std": 0.02},
     )
-    # # [2026-09-03] 定向小指/无名指掌根弯曲：切抓握后食中指已弯贴面，小指无名指仍不弯，
-    # #   finger_contact 的 min 短板（0.3）梯度不足 + hand_action_mag 压弯曲成本 → 短手指弯曲收益<成本。
-    # #   本项直接给 ring/little 掌根关节2 弯曲梯度（0.5*mean+0.5*min），绕开贴面距离门槛，
-    # #   先让短手指弯下来；贴面有力仍由 finger_contact 接力。
+    # [2026-09-04] ring_little_flex 关闭：其"逼 ring/little 弯曲"的定向压力是侧摆挤压的动机之一
+    #   （策略用食指中指侧摆推弯小指无名指来糊弄弯曲指标，而非主动贴面）。小指无名指弯曲受阻的
+    #   主因是侧摆挤压（几何上它们够得到面），不是缺弯曲梯度 → 先关掉，靠 finger_contact 贴面梯度接力。
     # ring_little_flex: RewTerm = RewTerm(
     #     func=mdp.base_flex_reward,
-    #     weight=1.0,
+    #     weight=0.0,
     #     params={"dist_threshold": 0.10, "max_flex": 0.5, "fingers": ("ring", "little")},
     # )
     # 正确抓取 = 力封闭（对向两面力取 min）。[Stage 2 2026-09-02] 0.0→1.0：激活力封闭奖励。
+    # [2026-09-03] 1.0→3.0：play 发现力封闭需要"拇指绕到四指对侧"的手腕旋转，被 tcp_orientation
+    #   惩罚压制（转 30° 罚 -0.61/步 vs grip 上限 +1/步）。grip ×3 让力封闭收益买得起姿态代价。
+    # [2026-09-03 绕位阶段] 3.0→0.0：暂时清零（绕位阶段不需要对向力确认），抓握阶段恢复 3.0。
+
     grip: RewTerm = RewTerm(
         func=mdp.opposition_reward,
-        weight=3.0,  # [2026-09-03 抓握阶段] 0.0→3.0：绕位完成，恢复力封闭奖励。
-        # [2026-09-04] scale 0.5→0.1：实测指尖接触力仅 0.03~0.09N，0.5 时 tanh 几乎不响应；
-        #   0.1 让 0.1N 对向力就有 tanh(1)=0.76 分，匹配接触力量级。力方向已改 cube 局部 y（见 rewards）。
-        # [2026-09-05] scale 0.1→0.05：逼更大对向力（0.08N→tanh(1.6)=0.92，0.2~0.3N 才近满分）；
-        #   配合 rewards.opposition_reward 里的 EMA 平滑滤噪，防 scale 变小时噪声被放大。
-        # [2026-09-06] scale 0.05→0.08：治后期熵漂移（8500 崩）——0.05 时 opp≈0.06N 落在 tanh(1.2)=0.83
-        #   半饱和段（梯度 sech²≈0.28 弱）→ 奖励平台化 → 优势趋零 → 熵奖励主导 → σ 漂移崩。
-        #   0.08 让同样 opp 落到陡坡段 tanh(0.75)=0.64（梯度翻倍），满分需 opp≈0.24N，
-        #   抓取后仍有持续加压梯度；配合 stiffness 60（opp 能上 0.1N+），掉分可爬回。
-        params={"gate_dist": 0.015, "scale": 0.05, "d_std": 0.01},
+        weight=5.0,  # [2026-09-07] 3.0→5.0：力起不来，提权重让对向力成为最大单项；只加不砍。
+        #   [2026-09-07 第5档] scale 0.15→0.21（×1.4 小步）：第4档成果 opp≈0.42 时 tanh(0.42/0.15)=0.99 完全饱和，
+        #     逼力边际梯度衰减（dR/dopp≈0.49），11.1k 后 grip_force/thumb_opposition 缓慢下降 + noise/entropy 上升
+        #     （熵漂移失稳，曲线实证）。切档把有效增力区间推到更高力段，grip 梯度 0.49→1.68。
+        #     本档目标 opp 0.6+：起点 opp 0.42→tanh(2.0)=0.96（掉分 0.14 可忽略），加压到 0.6 爬回饱和。
+        #     ⚠️ 不用 scale 0.30（×2）：grip 掉 0.53 撞"大步跳掉分爬不回"红线（历史 0.05→0.08 ×1.6 即崩）。
+        params={"gate_dist": 0.015, "scale": 0.21, "d_std": 0.01},
     )
+    # [2026-09-07] 力度加速项：grip(tanh) 饱和后给持续加压梯度。
+    #   增量式 opp_thresh：只奖超额对向力，不改变现状分；只认 y 向对向力（不奖励下压/侧推），EMA 平滑滤抖。
+    #   [2026-09-07 第5档] opp_thresh 0.16→0.40：重置增量基线到上档成果 opp≈0.42，
+    #     把有效增力区间推到 0.40N 以上；grip_force 梯度从指数衰减区（1.18）拉回高梯度区（5.83）。
+    # [2026-09-08 平台改斜坡] force_std 0.15→0.30 + weight 1.0→2.0：
+    #   根因：grip 在 opp 0.4~0.98 是满分平台（gate≈0.88 下 grip 4.22~4.41 几乎不变），
+    #     策略无"维持/加压"梯度 → 熵驱动随机游走 → 漂移崩（11.1k 后 grip_force 下降实证）。
+    #   拉宽 force_std 让 1-exp 在 opp 0.4~1.3 全程不饱和（把平台变斜坡），
+    #   weight 2.0 让斜坡压过熵漂移，把策略锚在"越紧越好"。续训起点 opp 0.64：grip_force 0.80→1.10（加，非砍）。
+
+
+
+    grip_force: RewTerm = RewTerm(
+        func=mdp.grip_force_reward,
+        weight=2.0,
+        # [2026-09-09] 加 stab_std=0.15 稳定门控：cube 非目标运动（xy 滑动+翻滚）越大加力收益越低，
+        #   治"推-追循环"；z 上升（被夹起）不罚。opp 已到上限（stiffness 补力失败），改求稳定。
+        params={"opp_thresh": 0.40, "force_std": 0.30, "stab_std": 0.15},
+    )
+
+
     # [2026-09-03] 拇指对侧奖励：引导拇指绕到四指对侧（力封闭的几何前提）。
     #   grip 是"力的稀疏确认"（拇指绕到位前恒 0，无梯度），本项给"几何密集引导"
     #   （接触前就有梯度）——互补：本项把拇指引到位，grip 确认夹住。
@@ -492,6 +524,22 @@ class RewardsCfg:
         #   进一步降低接触力瞬态尖峰对 value 的冲击（黄线 Step 1800~2200 崩塌触发源）。
         params={"force_std": 1.0, "deadzone": 0.02, "gate_dist": 0.04},
     )
+
+    # # [2026-09-08 解耦力与姿势] 指尖关节4过度蜷缩惩罚——治"勾棱边/蜷缩爪"作弊姿势。
+    # #   |j4|>0.5（约 28.6°）才罚，轻罚不干扰正常中段包络抓取；逼策略用指腹贴面而非指尖勾边。
+    # #   勾棱边姿势的物理上限 opp≈0.82（力上不去），不堵姿势策略永远卡在勾边，真夹紧才能突破 0.98。
+    # fingertip_overcurl: RewTerm = RewTerm(
+    #     func=mdp.fingertip_overcurl_penalty,
+    #     weight=-0.3,
+    #     params={"thresh": 0.5, "dist_threshold": 0.15},
+    # )
+    # # [2026-09-08 解耦力与姿势] 手指侧摆惩罚——治"手指侧向张开推挤邻指/cube"。
+    # #   侧摆偏离 0 超 0.1rad（约 5.7°）才罚；逼手指在抓取平面内对夹，而非侧向张开。
+    # finger_abduction: RewTerm = RewTerm(
+    #     func=mdp.finger_abduction_penalty,
+    #     weight=-0.3,
+    #     params={"thresh": 0.1, "dist_threshold": 0.15},
+    # )
     # [Stage 2 2026-09-01] 手掌最小距离惩罚：堵"压近手掌"hack。
     #   finger_contact 只按指尖→表面距离计分，策略学会压近手掌让指尖贴面（不弯曲手指），
     #   手掌从悬停(2cm)变贴压(<2cm) → thumb1 掌根段侵入 cube 上方、碰 cube 上表面。
@@ -509,23 +557,28 @@ class RewardsCfg:
     #     params={"clearance": 0.005, "pen_std": 0.015, "xy_gate": 0.04},
     # )
     # ===== 物体抬升（初始 weight=0，由课程学习在 60000 步后激活）=====
-    lifted: RewTerm = RewTerm(
-        func=mdp.object_lifted,
-        weight=0.0,  # 课程学习 → 2.0
-        params={"minimal_height": 0.825},
-    )
+    # lifted: RewTerm = RewTerm(
+    #     func=mdp.object_lifted,
+    #     weight=0.0,  # 课程学习 → 2.0
+    #     params={"minimal_height": 0.825},
+    # )
 
     # ===== 举升（Stage 3 启用，当前 weight=0）=====
     lift: RewTerm = RewTerm(
         func=mdp.lift_reward,
-        weight=0.0,  # Stage 3 → 2.0
-        params={"gate_dist": 0.3, "gate_steep": 10.0, "flex_thresh": 0.3, "flex_steep": 5.0, "z_thresh": 1.25},
+        weight=2.0,  # [2026-09-06] Stage 3 激活：目标=提起 1~2cm 离桌（用户要求，观察 cube 离开桌面即可）
+        #   z_thresh 1.25→0.79（cube 初始中心 0.78，0.79=离桌 1cm）；gate_dist 0.3→0.05（TCP 贴 cube 才给分）。
+        #   [2026-09-06] 加夹持力门控 lift_force_thresh=0.03：姿势是侧面夹持（非托举），门控用对向夹持力
+        #   opp（y 向两侧取 min），opp>0.03N 才给 lift 分，杜绝“贴面未抓稳就空抬”破坏抓取（play 8500/8600 诊断）。
+        #   真正夹起还需 opp>mg/(2μ)≈0.98N（μ=1.0），由 cube_z 实际升高隐含要求。
+        params={"gate_dist": 0.05, "gate_steep": 10.0, "flex_thresh": 0.3, "flex_steep": 5.0,
+                "z_thresh": 0.79, "lift_std": 0.01, "lift_force_thresh": 0.03, "force_steep": 100.0},
     )
-    palm_height: RewTerm = RewTerm(
-        func=mdp.palm_height_reward,
-        weight=0.0,  # Stage 3 → 1.0
-        params={"z_thresh": 1.30},
-    )
+    # palm_height: RewTerm = RewTerm(
+    #     func=mdp.palm_height_reward,
+    #     weight=0.0,  # Stage 3 → 1.0
+    #     params={"z_thresh": 1.30},
+    # )
 
     # ===== 成功（观测模式：纯 Stage 1，只要求手掌贴近 + 稳定，不要求手指/抬起）=====
     # 逐步发放、不终止；权重 30→3：保留每步"拉近+保持"梯度，双峰回报方差降 10×（9000→900）
