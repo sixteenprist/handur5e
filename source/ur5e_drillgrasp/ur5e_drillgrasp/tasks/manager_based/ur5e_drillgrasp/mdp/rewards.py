@@ -147,8 +147,8 @@ def _finger_flex_per_finger(robot: Articulation) -> torch.Tensor:
         q = abs_pos[:, ids]  # (N,4) [j1,j2,j3,j4]
         if i > 0 and len(ids) >= 4:
             # 层级门控：j3 计分需 j2 弯 >0.15，j4 计分需 j3 弯 >0.15
-            g3 = torch.sigmoid(8.0 * (q[:, 1] - 0.15))
-            g4 = torch.sigmoid(8.0 * (q[:, 2] - 0.15))
+            g3 = torch.sigmoid(8.0 * (q[:, 1] - 0.30))
+            g4 = torch.sigmoid(8.0 * (q[:, 2] - 0.30))
             contrib = w[0] * q[:, 0] + w[1] * q[:, 1] + w[2] * q[:, 2] * g3 + w[3] * q[:, 3] * g4
             per_finger.append(contrib / w.sum())
         else:
@@ -366,6 +366,52 @@ def finger_contact_reward(
     d = _tcp_cube_dist(env)
     gate = torch.clamp((dist_threshold + d_std - d) / d_std, min=0.0, max=1.0)
     return gate * score
+
+def contact_persistence_reward(
+    env: ManagerBasedRLEnv,
+    force_thresh: float = 0.03,
+    ema_alpha: float = 0.35,
+    dist_threshold: float = 0.05,
+    d_std: float = 0.02,
+) -> torch.Tensor:
+    """(2026-09-13) 接触持续性（占空比）奖励——专治"指尖贴面颤动"。
+
+    问题（用户 play 慢放观察）：手指接触 cube 时"有时接触有时不接触、变化很快、肉眼可见"，
+    cube 并未被推飞——是指面高频断触（contact chatter）。
+    现有奖励对颤动是"盲"的：finger_contact EMA α=0.15（≈7 步）、grip EMA α=0.3（≈3 步）
+    会把秒级以内的断续抹平；且 TensorBoard 读数为时间平均（1.2N×50% + 0×50% ≈ 0.6N×100%）
+    → 策略没有梯度消除"飞快断续"。
+
+    本项设计（对"事件"敏感、对"噪声"鲁棒）：
+      ① 瞬时二值化：指尖力 > force_thresh 视为"接触中"——0.03N 远高于传感器噪声，
+         不会把接触力高频噪声引入奖励（这是区别于 finger_contact 的关键）；
+      ② 短窗 EMA（α=0.35，时间常数 ≈2.9 步 ≈0.1s）→ "近期接触占空比" ∈ [0,1]，
+         能抓住 10Hz 级断续；持续贴合 → →1；颤动 → 在 0~1 间波动（均值被砍）；
+      ③ 聚合 0.8·mean + 0.2·min（与 finger_contact 一致：整体为主、短板辅助）；
+      ④ 软门控 d<5cm（姿势就位才计分——"学好姿势准备给力"的阶段之前恒 0 不添乱）。
+    与 finger_contact 分工：它管"力多大"（贴住+给力），本项管"别断"（持续贴合）。
+    [防 hack] "轻贴不发力"可拿本项分，但拿不到 grip/finger_contact 的力度分——分工明确。
+    [可调] 若观察到"贴住但松力"，可乘 tanh(f_ema/0.05~0.1) 力因子；force_thresh 可 ±0.01 微调。
+    """
+    from .observations import fingertip_contact_force
+    forces = fingertip_contact_force(env)                        # (N,5) N
+    touching = (forces > force_thresh).float()                   # (N,5) 瞬时"接触中"（事件级）
+
+    # 短窗占空比 EMA（独立状态，与 finger_contact 的 _contact_force_ema 不互扰）
+    if not hasattr(env, "_contact_duty_ema") or env._contact_duty_ema.shape != touching.shape:
+        env._contact_duty_ema = touching.clone()
+    duty = env._contact_duty_ema
+    duty = ema_alpha * touching + (1.0 - ema_alpha) * duty
+    if hasattr(env, "episode_length_buf"):
+        reset_mask = env.episode_length_buf == 0
+        if torch.any(reset_mask):
+            duty[reset_mask] = 0.0
+    env._contact_duty_ema = duty
+
+    per = 0.8 * duty.mean(dim=-1) + 0.2 * duty.min(dim=-1).values   # (N,)
+    d = _tcp_cube_dist(env)
+    gate = torch.clamp((dist_threshold + d_std - d) / d_std, min=0.0, max=1.0)
+    return gate * per
 
 
 def finger_close_reward(
@@ -644,21 +690,24 @@ def success_reward(
             & (v_lin < lin_vel_threshold) & (v_ang < ang_vel_threshold)
     ).float()
 
-
 def success_stage1_reward(
-        env: ManagerBasedRLEnv,
-        palm_dist_threshold: float = 0.06,
-        lin_vel_threshold: float = 0.05,
-        ang_vel_threshold: float = 0.10,
-        d_std: float = 0.02,
-        orient_threshold: float | None = None,
-        z_std: float | None = None,
+    env: ManagerBasedRLEnv,
+    palm_dist_threshold: float = 0.06,
+    lin_vel_threshold: float = 0.05,
+    ang_vel_threshold: float = 0.10,
+    lin_vel_std: float = 0.05,
+    ang_vel_std: float = 0.05,
+    d_std: float = 0.02,
+    orient_threshold: float | None = None,
+    z_std: float | None = None,
 ) -> torch.Tensor:
     """Stage 1 成功: TCP-Cube 距离 < palm_dist_threshold 且物体稳定（不要求手指）。
     逐步发放，episode 不终止。
 
-    ═══ 当前版本（激活）：饱和型（d_std 过渡带）+ z 方向约束 ═══
+    ═══ 当前版本（激活）：饱和型（d_std 过渡带）+ z 方向约束 + 软 stable ═══
     v87: 二值→饱和型——消除 0/1 硬跳变对价值函数的冲击。
+    [2026-09-12 平稳化] stable 同步软化：v_lin/v_ang 越过阈值后在 std 过渡带内线性衰减
+      （旧版 0/1 硬切在阈值边缘 flip → success 跳 4.0 → value 冲击，当前 value loss 0.13 超警戒线）。
     v93: orient_threshold 平放姿态门控（env_cfg 不传则不启用）。
     [用户] z_std: TCP 只允许在 cube 质心及以上——质心以上满分，质心下方 z_std 内线性衰减到 0
       （禁从下方接近/越过质心；贴面 TCP 在质心下方 3cm → 0）。线性衰减避免硬跳变。
@@ -667,7 +716,10 @@ def success_stage1_reward(
     ═══ 最初版本（v25 时代，注释保留）：二值（0/1）═══
     """
     obj: RigidObject = env.scene["cube_obj"]
-    v_lin = torch.norm(obj.data.root_lin_vel_w, dim=-1)
+    # [2026-09-11 解冲突] v_lin 只看 xy 速度（z 上升=目标运动，不破坏 stable）。
+    #   旧版 3D 范数含 v_z：策略一抬升 cube → v_lin 超阈值 → stable=0 → success 掉 3 分，
+    #   反向激励"不动"，与 lift（奖励抬升）目标冲突 → lift 恒 0 的结构性原因之一。
+    v_lin = torch.norm(obj.data.root_lin_vel_w[:, :2], dim=-1)
     v_ang = torch.norm(obj.data.root_ang_vel_w, dim=-1)
     d = _tcp_cube_dist(env)
     close = torch.clamp((palm_dist_threshold + d_std - d) / d_std, min=0.0, max=1.0)
@@ -677,7 +729,13 @@ def success_stage1_reward(
         cube_z = _get_cube_pos(env)[:, 2]
         above = torch.clamp(1.0 + (tcp_z - cube_z) / z_std, min=0.0, max=1.0)
         close = close * above
-    stable = ((v_lin < lin_vel_threshold) & (v_ang < ang_vel_threshold)).float()
+    # [2026-09-12 平稳化] 硬二值 → 软判定（v87 对 close 做过、stable 漏了）：
+    #   旧版 0/1 硬切：cube 被抓取推动时速度在阈值边缘抖动 → stable 0/1 flip → success 跳 4.0
+    #   → value loss 冲击（当前 0.13 超警戒线 0.10 的最大来源）。
+    #   新版：阈值内满分，越过阈值在 std 过渡带内线性衰减到 0（连续无跳变）。
+    v_lin_score = 1.0 - torch.clamp((v_lin - lin_vel_threshold) / lin_vel_std, 0.0, 1.0)
+    v_ang_score = 1.0 - torch.clamp((v_ang - ang_vel_threshold) / ang_vel_std, 0.0, 1.0)
+    stable = v_lin_score * v_ang_score
     if orient_threshold is not None:
         robot: Articulation = env.scene["robot"]
         tcp_body_id = _get_body_id(env, "wrist_3_link")
@@ -690,7 +748,6 @@ def success_stage1_reward(
         oriented = (ang < orient_threshold).float()
         return close * stable * oriented
     return close * stable
-
     # ---- 最初版本（切换时启用本段，并注释掉上面的 return）----
     # obj: RigidObject = env.scene["cube_obj"]
     # v_lin = torch.norm(obj.data.root_lin_vel_w, dim=-1)
@@ -1154,10 +1211,40 @@ def _opposition_force(env: ManagerBasedRLEnv) -> torch.Tensor:
       opp≥0.98 等价于"两侧都≥0.98"，逼策略把弱侧也加够，从而两侧平衡且摩擦力 2μF≥mg。
     """
     F_py, F_ny = _opposition_components(env)
-    # # [2026-09-09] 两侧对向力原始值写入 extras（metric），供 tensorboard 观测 Episode_Reward/opp_py、opp_ny。
-    # #   之前用 weight=0 的 RewardTerm 记录，但 tensorboard 记录的是 weight×raw=0，观测不到真实数值。
-    # env.extras["Episode_Reward"]["opp_py"] = F_py
-    # env.extras["Episode_Reward"]["opp_ny"] = F_ny
+    # [2026-09-10] DexManus 版 metric 记录：RewardManager 用 _episode_sums 累积、reset() 时写成
+    #   extras["Episode_Reward/<name>"]（扁平键，÷max_episode_length_s）。直接累积 F_py×step_dt，
+    #   曲线数值≈力值(N)，且不进入总 reward。此前 env.extras 嵌套键方案在该版本不存在（KeyError 根因）。
+    #   ⚠️ 放大倍数 = 本函数每步的调用次数（动态）：当前仅 grip 调用（×1，读数=时间平均实际值）；
+    #   开 lift 后 ×2；grip_force 已注释。读 metric 前先数一遍当前启用的调用方。
+    sums = env.reward_manager._episode_sums
+    if "opp_py" not in sums:
+        sums["opp_py"] = torch.zeros_like(F_py)
+        sums["opp_ny"] = torch.zeros_like(F_ny)
+    sums["opp_py"] += F_py * env.step_dt
+    sums["opp_ny"] += F_ny * env.step_dt
+    # [2026-09-13 颤动诊断] 单侧断触时间占比：瞬时力 < 0.05N 的帧计 1 × dt 累积（episode 平均 = 占比 0~1）。
+    #   用户 play 观察：接触颤动、贴不住，且 opp_py/opp_ny 曲线"连续平滑"——因为它们是时间平均
+    #   （1.2N×50% + 0×50% 的均值 = 0.6N×100% 的均值，颤动被平均掩盖）。
+    #   本指标专补盲区：读法 = 该侧"无接触"的时间比例。
+    #   对照读：avg力高 + 断触率高 = 断续大力（颤动）；avg力高 + 断触率低 = 稳定贴合。
+    #   （接近阶段天然为断触 → 前段值天然偏高，学会抓握后应骤降。）
+    if "opp_break_py" not in sums:
+        sums["opp_break_py"] = torch.zeros_like(F_py)
+        sums["opp_break_ny"] = torch.zeros_like(F_ny)
+    sums["opp_break_py"] += (F_py < 0.05).float() * env.step_dt
+    sums["opp_break_ny"] += (F_ny < 0.05).float() * env.step_dt
+    # [2026-09-10] 两侧施力点 z 高度（诊断倾倒力矩根因：对向力不共线 → τ=F·Δz 翻倒 cube）。
+    #   四指指尖 z 均值 vs 拇指指尖 z。Δz = z_fingers − z_thumb（两条曲线之差 ÷3 = 实际米数）。
+    #   独立初始化（不依赖 opp_py 分支，防后续增删 key 时 KeyError）。
+    z_fingers = torch.stack(
+        [_get_fingertip_pos(env, n)[:, 2] for n in _FINGERTIP_NAMES[1:]], dim=0
+    ).mean(dim=0)                                                        # (N,) 四指指尖 z 均值
+    z_thumb = _get_fingertip_pos(env, _FINGERTIP_NAMES[0])[:, 2]        # (N,) 拇指指尖 z
+    if "z_fingers" not in sums:
+        sums["z_fingers"] = torch.zeros_like(z_fingers)
+        sums["z_thumb"] = torch.zeros_like(z_thumb)
+    sums["z_fingers"] += z_fingers * env.step_dt
+    sums["z_thumb"] += z_thumb * env.step_dt
     return torch.minimum(F_py, F_ny)                          # (N,) 对向夹持力
 
 
@@ -1208,6 +1295,69 @@ def opposition_reward(
     return gate * opp
 
 
+def opposition_balance_reward(
+    env: ManagerBasedRLEnv,
+    opp_thresh: float = 0.40,
+    engage_steep: float = 10.0,
+) -> torch.Tensor:
+    """(2026-09-10) 两侧对向力平衡奖励——逼弱侧（拇指侧）追上强侧（四指侧）。
+
+    opp = min(F_py, F_ny) 的结构性盲区：min 只由弱侧决定，减强侧不改变 opp，
+      grip/grip_force 完全无感 → 策略可"四指单侧猛推 + 拇指弱接触"拿满 grip 分，
+      但两侧不平衡 → 四指持续推 cube → 接触滑动 + 提不起。
+    本项显式奖励"两侧平衡"，给"拇指侧加力/增接触"提供直接梯度。
+
+    两点设计（[2026-09-10] 用户建议：奖励得分应纯由平衡决定，不被其他因素污染）：
+      - balance = 1 − |F_py−F_ny|/(F_py+F_ny)：相对不平衡度，0=单侧 1=平衡。唯一主因子。
+      - engaged = sigmoid(engage_steep×(F_weak−opp_thresh))：夹持建立（弱侧>0.4N）才激活。
+        接触前两侧力都 0（balance=1 假平衡）→ engaged≈0 压死，避免接近阶段白拿满分。
+
+    [移除 level 因子] 旧版 level=tanh(F_weak/force_std) 原意是堵"松四指侧"作弊（松强侧→
+      balance↑但 level 不变），但它让得分随"力大小"漂移、读数不是纯平衡度、梯度不纯。
+      "逼弱侧涨"的职责已由 grip（逼 min 涨）+ grip_force（平衡后逼两侧一起涨）接管，
+      level 是重复劳动。移除后本项读数直接 = 平衡度（夹持建立后），可当诊断指标用。
+    """
+    F_py, F_ny = _opposition_components(env)                 # (N,) 两侧对向力（raw）
+    F_weak = torch.minimum(F_py, F_ny)                       # (N,) 弱侧 = opp
+    total = F_py + F_ny
+    imbalance = torch.abs(F_py - F_ny) / (total + 1e-6)      # (N,) 0~1
+    balance = 1.0 - imbalance                                # (N,) 1=平衡
+    engaged = torch.sigmoid(engage_steep * (F_weak - opp_thresh))   # (N,) 夹持建立软门
+    return engaged * balance
+
+def opposition_height_align_reward(
+    env: ManagerBasedRLEnv,
+    opp_thresh: float = 0.40,
+    z_std: float = 0.02,
+    engage_steep: float = 10.0,
+) -> torch.Tensor:
+    """(2026-09-10→11) 施力点高度对齐到 cube 质心——治"蜷缩勾棱边" + 消除倾倒力矩。
+
+    [2026-09-11 升级] 从"两侧互相对齐"（Δz=z_fingers−z_thumb→0）升级为"两侧都锚定到质心高度"：
+      蜷缩的空间特征 = 指尖在 cube 顶面以上勾棱边（实测 z_fingers 0.819 > 质心 0.78 + 半高 0.03）。
+      旧版只逼两侧相等，两侧一起升高（都在上方勾棱边）也能拿满分，治不了蜷缩。
+      新版 dz_f=z_fingers−cube_z、dz_t=z_thumb−cube_z 分别锚定质心：两侧都在质心高度
+      = 共线（零力矩）+ 过质心（指腹贴侧面，不勾棱边）——一个约束同时治蜷缩和倾倒。
+
+    设计要点：
+      - align = exp(−(dz_f/σ)²)·exp(−(dz_t/σ)²)：两侧都贴质心才满分。正 shaping 无负尖峰。
+      - engaged = sigmoid(engage_steep×(F_weak−opp_thresh))：夹持建立才激活，接近阶段不约束。
+      - 空间位置约束（指尖 z 坐标），非关节约束 → 避开手指 12 维锁死雷区。
+      - cube 被提起后 cube_z 上升，指尖应跟着走（相对质心不变），动态锚定天然成立。
+    """
+    F_py, F_ny = _opposition_components(env)                 # (N,) 两侧对向力（raw）
+    F_weak = torch.minimum(F_py, F_ny)                       # (N,) 弱侧 = opp
+    cube_z = _get_cube_pos(env)[:, 2]                        # (N,) cube 质心 z
+    z_fingers = torch.stack(
+        [_get_fingertip_pos(env, n)[:, 2] for n in _FINGERTIP_NAMES[1:]], dim=0
+    ).mean(dim=0)                                            # (N,) 四指指尖 z 均值
+    z_thumb = _get_fingertip_pos(env, _FINGERTIP_NAMES[0])[:, 2]   # (N,) 拇指指尖 z
+    dz_f = z_fingers - cube_z                                # (N,) 四指相对质心高度
+    dz_t = z_thumb - cube_z                                  # (N,) 拇指相对质心高度
+    align = torch.exp(-(dz_f / z_std) ** 2) * torch.exp(-(dz_t / z_std) ** 2)   # (N,) 都贴质心=1
+    engaged = torch.sigmoid(engage_steep * (F_weak - opp_thresh))   # (N,) 夹持建立软门
+    return engaged * align
+
 def excess_force_penalty(
         env: ManagerBasedRLEnv,
         threshold: float = 5.0,
@@ -1223,37 +1373,125 @@ def excess_force_penalty(
 # ══════════════════════════════════════════════════════════════
 
 def lift_reward(
-        env: ManagerBasedRLEnv,
-        gate_dist: float = 0.05,
-        gate_steep: float = 10.0,
-        flex_thresh: float = 0.3,
-        flex_steep: float = 5.0,
-        z_thresh: float = 0.79,
-        lift_std: float = 0.01,
-        lift_force_thresh: float = 0.3,
-        force_steep: float = 10.0,
+    env: ManagerBasedRLEnv,
+    gate_dist: float = 0.05,
+    gate_steep: float = 10.0,
+    flex_thresh: float = 0.2,
+    flex_steep: float = 5.0,
+    z_thresh: float = 0.78,
+    lift_std: float = 0.01,
+    lift_force_thresh: float = 0.03,
+    force_steep: float = 100.0,
 ) -> torch.Tensor:
     """(Stage 3) Cube 离桌 1~2cm 的举升奖励。门控: TCP 贴 cube + 手指弯曲 + 对向夹持力足够。
 
     [2026-09-06 重设计] 原版 z_thresh=1.25（举到半米高）对“提 1~2cm 离桌”目标太稀疏，
-    策略永远拿不到分学不会。几何：桌面顶 0.75、cube 半高 0.03、初始中心 0.78，
-    故离桌 1cm=0.79、2cm=0.80。
-      - z_thresh=0.79：离桌 1cm 开始给分；tanh(lifted/0.01) 让 2cm≈0.76、3cm≈0.96（软饱和无尖峰）。
+    策略永远拿不到分学不会。几何：桌面顶 0.75、cube 半高 0.03、初始中心 0.78。
+      - [2026-09-11] z_thresh=0.78（cube 贴桌质心）：一离桌就给分，消除 0.78~0.79 死区。
+        tanh(lifted/0.01) 让离桌 1cm≈0.76、2cm≈0.96（软饱和无尖峰）。
       - gate_dist 0.3→0.05：TCP 必须贴着 cube 才给分，防“没抓住就抬手”作弊。
       - [2026-09-06] 加夹持力门控：gripped = sigmoid(100×(opp−0.03))。姿势是侧面夹持（不是托举），
         提起靠夹持摩擦（f=μ·F_y），故门控用对向夹持力 opp（y 向两侧取 min），不用 z 向托力。
         没夹住（opp→0）→ gripped≈0 → lift 压死，杜绝“贴面未抓稳就空抬”破坏抓取（play 8500/8600 诊断）。
-        注：门控只防空抬；真正夹起还需 opp > mg/(2μ)≈0.98N（μ=1.0），这由 cube_z 实际升高隐含要求。
+        注：门控只防空抬；真正夹起还需 opp > mg/(2μ)=0.59N（μ=1.5，已确认手指 USD 无自带材质、全链路 fall back 全局），
+        这由 cube_z 实际升高隐含要求。
       - 原 sqrt(lift) 在 0 附近导数→∞ 会放大噪声，改 tanh 导数有界。
     """
     robot: Articulation = env.scene["robot"]
     obj: RigidObject = env.scene["cube_obj"]
     close = torch.sigmoid(gate_steep * (gate_dist - _tcp_cube_dist(env)))
     flexed = torch.sigmoid(flex_steep * (_finger_flex(robot) - flex_thresh))
-    opp = _opposition_force(env)  # (N,) 对向夹持力（侧面夹持的直接判据）
+    opp = _opposition_force(env)                                 # (N,) 对向夹持力（侧面夹持的直接判据）
     gripped = torch.sigmoid(force_steep * (opp - lift_force_thresh))  # (N,) 夹得够紧才给 lift 分
-    lifted = torch.clamp(obj.data.root_pos_w[:, 2] - z_thresh, min=0.0)
+    # [2026-09-11 消死区] 不 clamp：z_thresh=0.78=cube 贴桌质心，cube 一离桌（z>0.78）就有梯度。
+    #   旧版 clamp(z−0.79) 在 z∈[0.78,0.79] 死区无梯度，策略无引导跨不过 1cm → lift 恒 0。
+    lifted = obj.data.root_pos_w[:, 2] - z_thresh               # (N,) 离桌高度（贴桌=0，负=被压）
     return close * flexed * gripped * torch.tanh(lifted / lift_std)
+
+
+def object_goal_tracking_reward(
+    env: ManagerBasedRLEnv,
+    lift_std: float = 0.02,
+    table_height: float = 0.75,
+    hand_gate_dist: float = 0.06,
+    hand_gate_std: float = 0.03,
+) -> torch.Tensor:
+    """(2026-09-13 方案一+撞飞修复) 提起奖励 —— 纯"离桌高度"版（与 command 解耦）+ 手-物体门控。
+
+    [撞飞 hack 修复] 崩溃证据：机械臂乱动把 hand 带离 cube、cube 被撞飞 → clearance>0 →
+    tracking/bonus 反而给分 → 强化"乱动"→ 稳定抓取技能被覆盖（崩溃性遗忘）。
+    clearance 只能测"cube 离没离桌"，不能测"是被提起来的还是被撞飞的" → 加手-物体距离门控：
+      hand_gate = 1 − tanh(clamp(d − 6cm, min=0) / 3cm)
+      正常悬停/抓握提起（d 1.5~5cm）→ 1.0 零影响；撞飞（d 10cm+）→ ≈0 堵死。
+      物理语义："cube 离桌的功劳必须归于'手在 cube 附近'"。
+
+    [与 command 解耦] 改高度目标只改 lift_std（不动观测，避免 OOD）。
+    [翻滚防护] clearance = 最低顶点 z − 桌面（支撑函数），翻滚不触发。
+    形状：r = tanh(clearance / lift_std) × hand_gate；lift_std=0.02（提起课程序）：
+      抬 1cm 0.46 → 2cm 0.76 → 5cm 0.99（先"学会提起"，后期可拉回 0.06 学"提更高"）。
+    """
+    from isaaclab.utils.math import matrix_from_quat
+
+    obj: RigidObject = env.scene["cube_obj"]
+
+    # 最低顶点离桌间隙（支撑函数）：翻滚不会抬高最低顶点，只有真提起才会
+    R = matrix_from_quat(obj.data.root_quat_w)                   # (N, 3, 3)
+    z_offset = (R[:, 2, 0].abs() + R[:, 2, 1].abs() + R[:, 2, 2].abs()) * _CUBE_HALF_SIZE
+    bottom_z = obj.data.root_pos_w[:, 2] - z_offset              # 立方体最低顶点 z
+    clearance = torch.clamp(bottom_z - table_height, min=0.0)    # 离桌间隙（平放=0，压入=0）
+
+    # [撞飞 hack 修复] 手-物体距离门控：手离 cube >6cm 时得分快速衰减到 0
+    d = _tcp_cube_dist(env)
+    hand_gate = 1.0 - torch.tanh(torch.clamp(d - hand_gate_dist, min=0.0) / hand_gate_std)
+
+    return torch.tanh(clearance / lift_std) * hand_gate           # 离桌高度 × 手-物体门控
+
+
+def object_goal_bonus_once(
+    env: ManagerBasedRLEnv,
+    clearance_threshold: float = 0.15,
+    bonus: float = 20.0,
+    table_height: float = 0.75,
+    hand_dist_max: float = 0.08,
+) -> torch.Tensor:
+    """(2026-09-13 方案一+撞飞修复) 提起达标一次性奖励 —— 与 command 解耦 + 手-物体条件。
+
+    判定：clearance（最低顶点离桌间隙）> 0.15（离桌 15cm）**且手在 cube 8cm 内**。
+    [撞飞 hack 修复] 崩溃证据：cube 被机械臂乱动撞飞（腾空>15cm）→ bonus 被触发（10 分）
+    → 强化"乱动"。加 hand_dist_max 条件后：撞飞时手被带离（d 大）→ 不触发；
+    真提起（手抓着，d 1.5~5cm）→ 正常触发。
+    用 clearance 而非质心 z：翻滚不触发（同 tracking 的防 hack 判定）。
+    严格一次性（到达后锁定，掉落再到达不重复发），reset 事件清除（reset_goal_bonus_granted）。
+    """
+    from isaaclab.utils.math import matrix_from_quat
+
+    obj: RigidObject = env.scene["cube_obj"]
+
+    R = matrix_from_quat(obj.data.root_quat_w)                   # (N, 3, 3)
+    z_offset = (R[:, 2, 0].abs() + R[:, 2, 1].abs() + R[:, 2, 2].abs()) * _CUBE_HALF_SIZE
+    bottom_z = obj.data.root_pos_w[:, 2] - z_offset              # 立方体最低顶点 z
+    clearance = torch.clamp(bottom_z - table_height, min=0.0)    # 离桌间隙
+
+    d = _tcp_cube_dist(env)
+    reached = (clearance > clearance_threshold) & (d < hand_dist_max)   # 高 + 手在附近
+
+    N = env.num_envs
+    if not hasattr(env, "_goal_bonus_granted") or env._goal_bonus_granted.shape[0] != N:
+        env._goal_bonus_granted = torch.zeros(N, dtype=torch.bool, device=env.device)
+    first_time = reached & ~env._goal_bonus_granted
+    reward = first_time.float() * bonus
+    env._goal_bonus_granted = env._goal_bonus_granted | reached
+    return reward
+
+def reset_goal_bonus_granted(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+):
+    """reset 回调：清除指定 envs 的 goal 到达标记。"""
+    N = env.num_envs
+    if not hasattr(env, "_goal_bonus_granted") or env._goal_bonus_granted.shape[0] != N:
+        env._goal_bonus_granted = torch.zeros(N, dtype=torch.bool, device=env.device)
+    env._goal_bonus_granted[env_ids] = False
 
 
 # ══════════════════════════════════════════════════════════════

@@ -47,7 +47,7 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
         use_clipped_value_loss=True,
         clip_param=0.2,
 
-        entropy_coef=0.003,
+        entropy_coef=0.002,
         num_learning_epochs=5,
         num_mini_batches=4,
         # [熵爆急救 2026-09-01] learning_rate 1e-3→5e-4：配合 fixed 降低单次更新幅度，加速熵回落。

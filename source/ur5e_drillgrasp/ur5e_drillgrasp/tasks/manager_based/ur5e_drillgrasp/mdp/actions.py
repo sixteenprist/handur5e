@@ -193,7 +193,7 @@ class GroupedHandActionCfg(ActionTermCfg):
     # [2026-09-02] 0.03→1.5：绝对控制 scale=1.5 后，0.03 远小于单步动作满量程（1.5 rad），
     #   截断高斯动作 → KL/std 失控 → 熵爆（v70 教训：max_delta 必须 ≥ scale 满量程）。
     #   1.5 = scale，不截断正常单步动作，仍拦跨多步极端跳变。Stage 1（scale=0）不走此分支，无影响。
-    max_delta: float = 1.0
+    max_delta: float = 0.5
     # v66: raw action 裁剪范围（对齐 SoftHand clip）。None=不裁剪；1.0=限制 raw∈[-1,1]。
     # 与 max_delta 双保险：clip 拦 raw 绝对值，max_delta 拦每步目标变化。
     clip_range: float | None = 1.0

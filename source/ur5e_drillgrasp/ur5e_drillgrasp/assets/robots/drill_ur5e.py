@@ -10,7 +10,7 @@ DRILL_UR5E_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
 
         # v68: 改回 v1 之前的原资产 drill_ur5e.usd（v61 尝试 v1 资产后用户要求改回）
-        usd_path="/home/jiangli/zhaoyucheng/assets/drill_ur5e_v1.usd",
+        usd_path="/home/jiangli/zhaoyucheng/assets/drill_ur5e_v11.usd",
 
         # Stage 2: 恢复接触传感器（用户确认新系统传感器有数据）——指尖触觉 reward/观测需要
         activate_contact_sensors=True,
@@ -97,7 +97,7 @@ DRILL_UR5E_CFG = ArticulationCfg(
             stiffness=80.0,     # [2026-09-06] 40→80：Stage 3 举升力不足（opp≈0.06N vs 夹起 200g 需 0.98N）。
                                 #   力=k×位置误差，刚度×2 让同样弯曲产出 ×2 力（0.06→0.12N），且 grip=tanh(opp/0.05)
                                 #   对同样动作给更高分→策略有梯度跟着加压。200g 静摩擦 1.96N 足够，不会推飞（推飞是 100g 的问题）。
-            damping=4.0,        # 随刚度 80：临界阻尼 d≈2√(k·J)，k×2 → d×2（2.0→4.0），防欠阻尼接触力振荡
+            damping=6.0,        # 随刚度 80：临界阻尼 d≈2√(k·J)，k×2 → d×2（2.0→4.0），防欠阻尼接触力振荡
 
         ),
 
