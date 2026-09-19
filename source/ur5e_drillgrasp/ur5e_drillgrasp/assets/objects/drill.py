@@ -5,7 +5,7 @@ from isaaclab.assets import RigidObjectCfg
 DRILL_CFG = RigidObjectCfg(
     prim_path="{ENV_REGEX_NS}/Drill",
     spawn=sim_utils.UsdFileCfg(
-        usd_path='/home/jiangli/zhaoyucheng/assets/drill.usd',
+        usd_path="/home/jiangli/assets/drill.usd",
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             rigid_body_enabled=True,

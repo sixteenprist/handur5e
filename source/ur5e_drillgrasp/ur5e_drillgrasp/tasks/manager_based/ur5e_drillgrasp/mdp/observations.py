@@ -24,11 +24,11 @@ from isaaclab.utils.math import quat_apply
 
 _FINGERTIP_NAMES = ["thumb4", "index4", "middle4", "ring4", "little4"]
 
-# Cube 半边长 (m)（v34: 7cm→7.5cm）；rewards 也复用本常量
-_CUBE_HALF_SIZE = 0.03  # v71: 0.035→0.03（cube 7cm→6cm 同步）
+# Cube 半边长 (m)：6cm 边长的一半；rewards 也复用本常量
+_CUBE_HALF_SIZE = 0.025
 
 # TCP offset — wrist_3_link 局部坐标系 (B)，需与 env_cfg.body_offset 和 reset_events 保持一致
-_BODY_OFFSET = torch.tensor([0.0, 0.08, 0.11])
+_BODY_OFFSET = torch.tensor([0.0, 0.08, 0.11])  # 与 env_cfg body_offset 保持一致（rewards 复用本常量）
 
 
 # ══════════════════════════════════════════════════════════════
@@ -153,6 +153,8 @@ def palm_to_cube(env: ManagerBasedRLEnv) -> torch.Tensor:
 def fingertip_to_cube_surface(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) 五个指尖 → Cube 表面向量，展平为 15D。
     扣除了 Cube 半边长 3cm，0=指尖贴面。
+    [2026-09-14 四指共享] 四指分量为强相关冗余，但**维度保持 5 指不变**（obs 98 维与 checkpoint
+      兼容）；奖励端聚合才做"拇指组+四指组"两组化（rewards._thumb_four_split）。
     """
     robot: Articulation = env.scene["robot"]
     cube_pos = env.scene["cube_obj"].data.root_pos_w               # (N, 3)
@@ -176,6 +178,8 @@ def fingertip_to_cube_surface(env: ManagerBasedRLEnv) -> torch.Tensor:
 def fingertip_contact_force(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) 五个指尖净接触力范数 → (N, 5)，单位 N。>0 = 碰到 Cube。
     env.scene.sensors[name].data.force_matrix_w[:, 0, 0, :]
+    [2026-09-14 四指共享] 输出接口保持 (N,5) 不变；奖励端聚合按拇指组+四指组
+      （rewards._thumb_four_split），此处不做切片。
     """
     forces = torch.zeros(env.num_envs, 5, device=env.device)
     sensor_names = ["contact_thumb", "contact_index", "contact_middle", "contact_ring", "contact_little"]

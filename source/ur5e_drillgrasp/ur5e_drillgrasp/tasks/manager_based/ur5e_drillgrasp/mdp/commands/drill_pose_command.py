@@ -35,13 +35,12 @@ class DrillPoseCommand(CommandTerm):
         if env_ids is None:
             env_ids = slice(None)
 
-        # v93: 目标同步 cube 新位置 (-0.161, 0.175, 0.78)（移到初始 TCP 正下方，治翻转捷径）
         # z 0.78 = 桌面 0.75 + 半高 0.03
-        # [2026-09-13 方案一] command 冻结：⚠️ 此值仅为"观测兼容"保持 0.81（旧策略熟悉的输入），
+        # [2026-09-13 方案一] command 冻结：⚠️ 此值仅为"观测兼容"（旧策略熟悉的输入），
         #   不要在这里改"提起高度"！task 目标（离桌 17cm 等）由奖励参数定义
         #   （object_goal_tracking_reward 的 lift_std）。改这里 = 改观测 = 旧策略 OOD → 全局崩。
         self.goal[env_ids, :3] = torch.tensor(
-            [-0.16, 0.175, 0.78],
+            [-0.16, 0.175, 0.775],
             device=self.goal.device
         )
 
