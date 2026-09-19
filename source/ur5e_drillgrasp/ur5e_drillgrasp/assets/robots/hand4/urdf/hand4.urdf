@@ -1,0 +1,1267 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="hand4">
+  <link
+    name="base_link_1">
+    <inertial>
+      <origin
+        xyz="0.027755 0.078088 0.086471"
+        rpy="0 0 0" />
+      <mass
+        value="0.044157" />
+      <inertia
+        ixx="3.9621E-05"
+        ixy="8.1957E-06"
+        ixz="-3.2151E-06"
+        iyy="4.0426E-05"
+        iyz="-4.2277E-06"
+        izz="6.6957E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/base_link_1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/base_link_1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="thumb1">
+    <inertial>
+      <origin
+        xyz="0.0054918 0.0055679 0.018611"
+        rpy="0 0 0" />
+      <mass
+        value="0.009529" />
+      <inertia
+        ixx="1.7742E-06"
+        ixy="-3.8018E-07"
+        ixz="2.6852E-07"
+        iyy="1.8881E-06"
+        iyz="3.4735E-07"
+        izz="2.3381E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/thumb1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/thumb1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="thumb1_joint"
+    type="revolute">
+    <origin
+      xyz="0.048861 0.082907 0.085319"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="base_link_1" />
+    <child
+      link="thumb1" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="thumb2">
+    <inertial>
+      <origin
+        xyz="-4.6491E-16 2.6368E-16 -5E-05"
+        rpy="0 0 0" />
+      <mass
+        value="0.00094727" />
+      <inertia
+        ixx="1.8337E-08"
+        ixy="-6.2155E-11"
+        ixz="-1.4889E-23"
+        iyy="1.8296E-08"
+        iyz="2.2747E-24"
+        izz="3.5591E-08" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/thumb2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/thumb2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="thumb2_joint"
+    type="revolute">
+    <origin
+      xyz="0.04793 0.011792 0.0034772"
+      rpy="-0.62923 0.95066 -1.97759265" />
+    <parent
+      link="thumb1" />
+    <child
+      link="thumb2" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="thumb3">
+    <inertial>
+      <origin
+        xyz="-0.0018249 -0.023563 0.00020293"
+        rpy="0 0 0" />
+      <mass
+        value="0.0064744" />
+      <inertia
+        ixx="7.2489E-07"
+        ixy="1.3807E-08"
+        ixz="5.4762E-09"
+        iyy="2.2725E-07"
+        iyz="4.2914E-09"
+        izz="7.0306E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/thumb3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/thumb3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="thumb3_joint"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="3.1416 -1.5708 0" />
+    <parent
+      link="thumb2" />
+    <child
+      link="thumb3" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="thumb4">
+    <inertial>
+      <origin
+        xyz="0.019171 -0.0011119 0.00019453"
+        rpy="0 0 0" />
+      <mass
+        value="0.0090225" />
+      <inertia
+        ixx="4.6256E-07"
+        ixy="-8.3094E-08"
+        ixz="-4.986E-08"
+        iyy="9.0182E-07"
+        iyz="-1.3241E-08"
+        izz="6.7735E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/thumb4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/thumb4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="thumb4_joint"
+    type="revolute">
+    <origin
+      xyz="-0.00057142 -0.036717 -0.00046"
+      rpy="0 0 -1.5708" />
+    <parent
+      link="thumb3" />
+    <child
+      link="thumb4" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="index1">
+    <inertial>
+      <origin
+        xyz="2.9837E-16 -9.3675E-17 -5E-05"
+        rpy="0 0 0" />
+      <mass
+        value="0.00094727" />
+      <inertia
+        ixx="1.8349E-08"
+        ixy="-3.9802E-11"
+        ixz="-2.4815E-24"
+        iyy="1.8284E-08"
+        iyz="1.4729E-24"
+        izz="3.5591E-08" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/index1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/index1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="index1_joint"
+    type="revolute">
+    <origin
+      xyz="0.065353 0.014156 0.083414"
+      rpy="0 -0.17453 3.14159265" />
+    <parent
+      link="base_link_1" />
+    <child
+      link="index1" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="index2">
+    <inertial>
+      <origin
+        xyz="0.00056224 -0.028225 0.00028053"
+        rpy="0 0 0" />
+      <mass
+        value="0.0054497" />
+      <inertia
+        ixx="5.9437E-07"
+        ixy="3.5062E-08"
+        ixz="4.622E-09"
+        iyy="2.5267E-07"
+        iyz="-1.1687E-08"
+        izz="6.0861E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/index2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/index2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="index2_joint"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="3.1416 -1.5708 0" />
+    <parent
+      link="index1" />
+    <child
+      link="index2" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="index3">
+    <inertial>
+      <origin
+        xyz="0.00071444265744805 -0.0132073207946737 -0.000747026737192069"
+        rpy="0 0 0" />
+      <mass
+        value="0.00181792246567547" />
+      <inertia
+        ixx="9.97398556538736E-08"
+        ixy="7.15793520327117E-09"
+        ixz="-6.68761117449821E-11"
+        iyy="5.04521276414916E-08"
+        iyz="3.68790357788505E-09"
+        izz="1.25707330114771E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/index3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/index3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="index3_joint"
+    type="revolute">
+    <origin
+      xyz="-0.0005 -0.044694 -1.0001E-05"
+      rpy="0 0 0" />
+    <parent
+      link="index2" />
+    <child
+      link="index3" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="index4">
+    <inertial>
+      <origin
+        xyz="-0.00357726278529166 -0.0122885302864586 0.000175233594590429"
+        rpy="0 0 0" />
+      <mass
+        value="0.00244891729010408" />
+      <inertia
+        ixx="1.08568634981218E-07"
+        ixy="1.62097956525348E-08"
+        ixz="7.99985810673682E-10"
+        iyy="5.31121804651697E-08"
+        iyz="-1.77313203122964E-09"
+        izz="9.46741558329683E-08" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/index4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/index4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="index4_joint"
+    type="revolute">
+    <origin
+      xyz="0.0023837 -0.023881 0"
+      rpy="0 0 0" />
+    <parent
+      link="index3" />
+    <child
+      link="index4" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="middle1">
+    <inertial>
+      <origin
+        xyz="3.05311331771918E-16 -9.71445146547012E-17 -5.00000000010631E-05"
+        rpy="0 0 0" />
+      <mass
+        value="0.000947272810228728" />
+      <inertia
+        ixx="1.83494800658386E-08"
+        ixy="-3.98024133390021E-11"
+        ixz="4.6940627334913E-25"
+        iyy="1.82838824612882E-08"
+        iyz="-1.29981207972388E-25"
+        izz="3.55913668739275E-08" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/middle1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/middle1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="middle1_joint"
+    type="revolute">
+    <origin
+      xyz="0.039195 0.0075839 0.085379"
+      rpy="0 0 0" />
+    <parent
+      link="base_link_1" />
+    <child
+      link="middle1" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="middle2">
+    <inertial>
+      <origin
+        xyz="-0.000562244764029537 0.0282249651077096 0.000280530684353887"
+        rpy="0 0 0" />
+      <mass
+        value="0.005449651476134" />
+      <inertia
+        ixx="5.94374639329708E-07"
+        ixy="3.50616983515787E-08"
+        ixz="-4.62198857498379E-09"
+        iyy="2.52674243078983E-07"
+        iyz="1.16873480853748E-08"
+        izz="6.08610365719731E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/middle2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/middle2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="middle2_joint"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="3.1416 1.5708 0" />
+    <parent
+      link="middle1" />
+    <child
+      link="middle2" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="middle3">
+    <inertial>
+      <origin
+        xyz="0.000714442655806433 -0.0132073208127206 -0.000747028082567443"
+        rpy="0 0 0" />
+      <mass
+        value="0.00181792247604061" />
+      <inertia
+        ixx="9.97398562425666E-08"
+        ixy="7.1579352271946E-09"
+        ixz="-6.68760264059762E-11"
+        iyy="5.04521276505481E-08"
+        iyz="3.68790359824953E-09"
+        izz="1.2570733084503E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/middle3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/middle3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="middle3_joint"
+    type="revolute">
+    <origin
+      xyz="0.0005 0.044694 -1E-05"
+      rpy="0 0 -3.1416" />
+    <parent
+      link="middle2" />
+    <child
+      link="middle3" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="middle4">
+    <inertial>
+      <origin
+        xyz="0.00357725580006198 0.0122885277922919 0.000175228275939597"
+        rpy="0 0 0" />
+      <mass
+        value="0.00244891445095396" />
+      <inertia
+        ixx="1.08568667702204E-07"
+        ixy="1.62097532475135E-08"
+        ixz="-8.00003100335675E-10"
+        iyy="5.31121000366176E-08"
+        iyz="1.77312632793335E-09"
+        izz="9.46742803924279E-08" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/middle4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/middle4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="middle4_joint"
+    type="revolute">
+    <origin
+      xyz="0.0023837 -0.023881 0"
+      rpy="0 0 -3.1416" />
+    <parent
+      link="middle3" />
+    <child
+      link="middle4" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="ring1">
+    <inertial>
+      <origin
+        xyz="3.05311331771918E-16 -9.8879238130678E-17 -5.00000000010631E-05"
+        rpy="0 0 0" />
+      <mass
+        value="0.000947272810228728" />
+      <inertia
+        ixx="1.83494800658386E-08"
+        ixy="-3.98024133390025E-11"
+        ixz="3.62632253800035E-25"
+        iyy="1.82838824612882E-08"
+        iyz="-2.00566926392041E-26"
+        izz="3.55913668739275E-08" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/ring1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/ring1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="ring1_joint"
+    type="revolute">
+    <origin
+      xyz="0.017195 0.013515 0.085379"
+      rpy="0 0 3.14159265" />
+    <parent
+      link="base_link_1" />
+    <child
+      link="ring1" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="ring2">
+    <inertial>
+      <origin
+        xyz="0.000562244763847197 -0.0282249651075245 0.000280530684077372"
+        rpy="0 0 0" />
+      <mass
+        value="0.00544965147591211" />
+      <inertia
+        ixx="5.94374639327402E-07"
+        ixy="3.5061698347909E-08"
+        ixz="4.62198857394918E-09"
+        iyy="2.5267424306968E-07"
+        iyz="-1.16873480846884E-08"
+        izz="6.08610365708611E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/ring2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/ring2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="ring2_joint"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="3.1416 -1.5708 0" />
+    <parent
+      link="ring1" />
+    <child
+      link="ring2" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="ring3">
+    <inertial>
+      <origin
+        xyz="-0.000714442655855241 0.0132073208128538 -0.000747028082664383"
+        rpy="0 0 0" />
+      <mass
+        value="0.00181792247608388" />
+      <inertia
+        ixx="9.97398562446307E-08"
+        ixy="7.15793522800686E-09"
+        ixz="6.68760267974243E-11"
+        iyy="5.04521276514188E-08"
+        iyz="-3.68790359886709E-09"
+        izz="1.25707330847405E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/ring3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/ring3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="ring3_joint"
+    type="revolute">
+    <origin
+      xyz="-0.0005 -0.044694 -1E-05"
+      rpy="0 0 3.1416" />
+    <parent
+      link="ring2" />
+    <child
+      link="ring3" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="ring4">
+    <inertial>
+      <origin
+        xyz="-0.00357725580006235 -0.0122885277922916 0.000175228275939448"
+        rpy="0 0 0" />
+      <mass
+        value="0.00244891445095413" />
+      <inertia
+        ixx="1.08568667702212E-07"
+        ixy="1.62097532475179E-08"
+        ixz="8.00003100333967E-10"
+        iyy="5.31121000366214E-08"
+        iyz="-1.77312632793069E-09"
+        izz="9.46742803924372E-08" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/ring4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/ring4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="ring4_joint"
+    type="revolute">
+    <origin
+      xyz="-0.0023837 0.023881 0"
+      rpy="0 0 3.1416" />
+    <parent
+      link="ring3" />
+    <child
+      link="ring4" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="little1">
+    <inertial>
+      <origin
+        xyz="7.79301970177393E-13 -3.52096823919013E-13 -5.00004745010163E-05"
+        rpy="0 0 0" />
+      <mass
+        value="0.000947272810228723" />
+      <inertia
+        ixx="1.83494800658384E-08"
+        ixy="-3.98024133399162E-11"
+        ixz="4.54949336904165E-24"
+        iyy="1.82838824612882E-08"
+        iyz="-1.78199260868357E-24"
+        izz="3.55913668739272E-08" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/little1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/little1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="little1_joint"
+    type="revolute">
+    <origin
+      xyz="-0.0079628 0.025109 0.083414"
+      rpy="0 0.17453 3.14159265" />
+    <parent
+      link="base_link_1" />
+    <child
+      link="little1" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="little2">
+    <inertial>
+      <origin
+        xyz="0.000562244760434857 -0.0282249651007924 0.000280530470411903"
+        rpy="0 0 0" />
+      <mass
+        value="0.00544965146547898" />
+      <inertia
+        ixx="5.94374637357089E-07"
+        ixy="3.50616989004463E-08"
+        ixz="4.62198856823235E-09"
+        iyy="2.52674243237362E-07"
+        iyz="-1.16873481770559E-08"
+        izz="6.08610364449582E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/little2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/little2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="little2_joint"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="0 -1.5708 3.1416" />
+    <parent
+      link="little1" />
+    <child
+      link="little2" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="little3">
+    <inertial>
+      <origin
+        xyz="0.000714442642387639 -0.013207320779593 -0.000747028176998883"
+        rpy="0 0 0" />
+      <mass
+        value="0.00181792246474883" />
+      <inertia
+        ixx="9.9739855657435E-08"
+        ixy="7.1579350118324E-09"
+        ixz="-6.68760924287977E-11"
+        iyy="5.04521275122963E-08"
+        iyz="3.68790337372143E-09"
+        izz="1.25707330126469E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/little3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/little3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="little3_joint"
+    type="revolute">
+    <origin
+      xyz="-0.0005 -0.044694 -1E-05"
+      rpy="0 0 0" />
+    <parent
+      link="little2" />
+    <child
+      link="little3" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+  <link
+    name="little4">
+    <inertial>
+      <origin
+        xyz="-0.00357725144506804 -0.012288532646672 0.000175231636508236"
+        rpy="0 0 0" />
+      <mass
+        value="0.00244890943309084" />
+      <inertia
+        ixx="1.08568274261573E-07"
+        ixy="1.62097269693111E-08"
+        ixz="7.99914093151187E-10"
+        iyy="5.31120101600511E-08"
+        iyz="-1.77321166582483E-09"
+        izz="9.4673980907468E-08" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/little4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://hand4/meshes/little4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="little4_joint"
+    type="revolute">
+    <origin
+      xyz="0.0023837 -0.023881 0"
+      rpy="0 0 0" />
+    <parent
+      link="little3" />
+    <child
+      link="little4" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="10"
+      velocity="1" />
+    <dynamics
+      damping="0"
+      friction="0.1" />
+  </joint>
+</robot>
