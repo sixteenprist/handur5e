@@ -25,7 +25,7 @@ from isaaclab.utils.math import quat_apply
 _FINGERTIP_NAMES = ["thumb4", "index4", "middle4", "ring4", "little4"]
 
 # Cube 半边长 (m)：6cm 边长的一半；rewards 也复用本常量
-_CUBE_HALF_SIZE = 0.025
+_CUBE_HALF_SIZE = 0.03
 
 # TCP offset — wrist_3_link 局部坐标系 (B)，需与 env_cfg.body_offset 和 reset_events 保持一致
 _BODY_OFFSET = torch.tensor([0.0, 0.08, 0.11])  # 与 env_cfg body_offset 保持一致（rewards 复用本常量）

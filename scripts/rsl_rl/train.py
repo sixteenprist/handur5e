@@ -220,6 +220,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         runner.load(resume_path)
+        # [2026-09-21 v5.7 监控自主] rsl_rl 的 runner.load 连优化器状态一起恢复
+        #   （optimizer.load_state_dict 含 param_groups 的 lr）→ 配置里的 learning_rate 会被
+        #   checkpoint 里的旧 lr 覆盖。实证：lr 8e-5/2e-5 两次改动与旧 run 轨迹 bit-identical，
+        #   实际一直跑在 1.5e-4。加载后强制用配置值覆盖（动量/二阶矩保留=热启动）。
+        try:
+            for _g in runner.alg.optimizer.param_groups:
+                _g["lr"] = agent_cfg.algorithm.learning_rate
+            print(f"[INFO]: 优化器 lr 已按配置覆盖为 {agent_cfg.algorithm.learning_rate}")
+        except Exception as _exc:  # noqa: BLE001
+            print(f"[WARN]: 覆盖优化器 lr 失败（不影响运行，但 lr 可能沿用旧值）: {_exc}")
 
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)

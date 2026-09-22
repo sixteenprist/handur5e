@@ -17,17 +17,23 @@ register_clamped_actor_critic()
 
 @configclass
 class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    # v72: 16——用户缩短 rollout 加快每代迭代；Stage 1 纯接近任务动作简单，16 步够用。
-    num_steps_per_env = 16
+    # [2026-09-21 v6 归一化·用户决定] 32→24：回到官方任务标准（IsaacLab Franka Lift / Allegro
+    #   in-hand 均为 24；rsl_rl/legged_gym 惯例 24）。此前 16/32 是针对性补丁，现配置已归一化。
+    #   回退：32（更长信用分配窗口）/ 16（更快迭代）。
+    num_steps_per_env = 24
     max_iterations = 10000
     # v70: 100→50——用户远程已改为每 50 轮保存（方便更细的续训/回退点，如 model_150）
-    save_interval = 50
+    # [2026-09-21 v5.5] 50→25：峰值→退化窗口仅 ~30 iter（1018→1050），50 间隔漏掉峰值。
+    # [2026-09-21 v5.6] 25→5：峰值窗口仅 ~10 iter（1006~1011），25 仍会漏掉；加密采峰。
+    save_interval = 5
     # [2026-09-14 四指共享] 从头训练：动作 18D→14D（手部四指共享 8D）。
     # [2026-09-15 力观测回归] fingertip_force 从 critic 移回 actor（98→103 维）：
     #   "始终贴面给力"需要策略感知接触力（闭环）；S2 未出成果 → 弃旧 ckpt 重训成本最低。
     #   旧 checkpoint（含 09-14/09-15 全部 run）一律不兼容，本版从头训练、不 resume。
-    #   旧实验保留在 logs/rsl_rl/ur5e_grasp_4share_v1 等目录（勿覆盖）。
-    experiment_name = "ur5e_grasp_4share_v1"
+
+    # [2026-09-21 v5] 新流程：GUI 预置对置姿态（±0.005 轻随机）→ 只学"贴近+抓稳力封闭+提起"。
+    #   从头训练（新初始位姿+精简奖励，旧 ckpt 不适用），新目录便于与 v4 对比。
+    experiment_name = "ur5e_grasp_v5"
     # ===== 非对称 actor-critic 观测组映射（借鉴 SoftHand）=====
     # actor  ← policy 组（103 维 = 26 关节位置 + 26 关节速度 + 14 动作 + 3+3 相对向量
     #          + 4 cube 朝向 + 3+4 手掌位姿 + 15 指尖向量 + 5 指尖接触力；
@@ -56,26 +62,34 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
         critic_hidden_dims=[512, 256, 128],
         activation="elu",
     )
+    # ═══ [2026-09-21 v6 PPO 归一化·用户决定] 对照调研（rsl_rl 默认 / IsaacLab Franka Lift /
+    #   IsaacLab Allegro in-hand，见对话记录）把历史"防崩补丁"（epochs2/clip0.1/lr5e-5/
+    #   entropy0.0015/fixed）全部回归标准值，采用官方灵巧手（Allegro）风格：
+    #     lr 1e-4 + adaptive(desired_kl 0.01) / epochs 5 / minibatch 4 / clip 0.2 /
+    #     entropy 0.002 / gamma 0.99 / lam 0.95 / max_grad_norm 1.0 / clipped value loss。
+    #   说明：旧补丁是在"续训 lr 被优化器状态覆盖"bug 未发现时打的（train.py 已修复），
+    #     且 σ 护栏 0.09/0.12 保留（用户设计）——算法其余部分不再有非标成分。
+    #   ⚠️ 历史记录 adaptive 曾把 lr 漂到 1e-2 致崩（v15），但那是与 σ 自由等问题叠加；
+    #     官方默认即 adaptive。监控重点新增 lr 曲线；若再见漂移，改 schedule="fixed" 即可。
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-
-        entropy_coef=0.003,
+        entropy_coef=0.002,
         num_learning_epochs=5,
         num_mini_batches=4,
-        # [熵爆急救 2026-09-01] learning_rate 1e-3→5e-4：配合 fixed 降低单次更新幅度，加速熵回落。
-        #   （v65 曾写 1e-3→5e-4，后被改回 1e-3，现恢复 5e-4）
-        learning_rate=5.0e-4,
-        # v15 修复: adaptive → fixed。adaptive 在策略稳定期(KL<0.005)会把 lr 一路 ×1.5 爬到
-        # 1e-2 上限，随后一次大更新把策略推离稳定点 → value loss 爆炸(7.8)且不可逆退化(v15@572)。
-        # fixed 保持 lr 恒定，杜绝 lr 漂移导致的突然失稳。
-        # [熵爆急救 2026-09-01] adaptive→fixed：entropy 从 14 一路涨到 29 的元凶就是 adaptive 把 lr 漂移到 1e-2。
+        # [2026-09-22 v8.2 监控自主] 5e-5→1e-5：进入"巩固期"——当前最佳策略已达
+        #   持续对置 gate=1.0 + 41% 时段抬过 7.5cm；burst 循环边际递减。用极小 lr 长跑，
+        #   让策略在好解附近缓慢精修（漂移速率 ∝ lr），配合 5 分钟监控+加密存档采峰。
+        #   回退：5e-5 / 1e-4。
+        learning_rate=1e-5,
+        # [2026-09-21 v7.1 监控自主] adaptive→fixed：逐轮 lr 日志实测——adaptive 在
+        #   1.0e-5 ↔ 1.7e-4 之间每轮横跳（KL 在 desired_kl/2 边界反复穿越），
+        #   配合接触不连续把策略从峰值(iter~130, gate 1.0/力 0.68N 平衡/抬 2.7cm)缓慢推离。
+        #   固定 lr=1e-4（官方 Franka Lift 同值）使更新平滑；回退：adaptive（若固定后学习停滞）。
         schedule="fixed",
         gamma=0.99,
         lam=0.95,
-        # desired_kl 仅 adaptive schedule 生效；当前 schedule="fixed"，此值为占位（无害）。
-        #   可选实验：gamma 0.99→0.995（提起阶段的信用分配更远视，episode 300 控制步）。
         desired_kl=0.01,
         max_grad_norm=1.0,
     )

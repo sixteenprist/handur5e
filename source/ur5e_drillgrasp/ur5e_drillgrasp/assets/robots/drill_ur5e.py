@@ -18,13 +18,17 @@ DRILL_UR5E_CFG = ArticulationCfg(
         #   ②USD 文件内部物理材质（需在 USD 编辑器里确认手指碰撞体是否自带材质）
         collision_props=sim_utils.CollisionPropertiesCfg(
             collision_enabled=True,
-            contact_offset=0.002,      # 2mm 接触容差
+            # [2026-09-19 22:20 物理软化·干预2] contact_offset 2mm→5mm：接触在表面外更早生成
+            #   → 减少"深穿透→求解挣扎→collection time 暴涨"（20:57 run 崩坏前兆）。
+            #   代价：手指离表面 5mm 内即产生接触力（触觉半径变大，柔化接触）。
+            contact_offset=0.005,
             rest_offset=0.0,
         ),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             solver_position_iteration_count=16,
             solver_velocity_iteration_count=1,
-            max_depenetration_velocity=1.0,
+            # [2026-09-19 22:20 物理软化·干预2] 穿透回弹速度 1.0→0.5：深穿透恢复更柔，减冲击。
+            max_depenetration_velocity=0.5,
         ),
 
         # [2026-09-14 防"绞死"] 显式关闭 articulation 内部自碰撞（指-指 / 指-掌 / 手-臂）：
@@ -50,11 +54,9 @@ DRILL_UR5E_CFG = ArticulationCfg(
             #   角度来自用户 IsaacSim GUI 实测 [90,-100,-120,-145,-90,180]°（手掌朝下）→ 弧度：
             #   ⚠️ σ 地板/train.py 补丁仍建议后续补上——缩距治概率，地板治机制。
             "shoulder_pan_joint":1.5708,     # 90°
-            "shoulder_lift_joint":-1.7453,   # -100°（原 -90°）
-            "elbow_joint":-2.0944,           # -120°（原 -90°）
-            # [2026-09-16 预科 v2·用户 GUI 实测] wrist_1 -145°→-140°：手拖姿势关键角之一
-            #   （与 thumb2=-60°、thumb4=+40° 同组；thumb1/thumb3 保持 -10°/0°）
-            "wrist_1_joint":-2.4435,         # -140°（原 -145°）
+            "shoulder_lift_joint":-2.0944,   # -120°
+            "elbow_joint":-2.2689,           # -130°
+            "wrist_1_joint":-1.9199,         # -110°
             "wrist_2_joint":-1.5708,         # -90°
             "wrist_3_joint":3.1416,          # 180°，手掌朝下
 
@@ -93,26 +95,37 @@ DRILL_UR5E_CFG = ArticulationCfg(
 
 
 
-            "thumb1_joint": 0,  # -10°（限位 [-90°,0°] 内）
-            "thumb2_joint": 0,  # -60°（原 -20°）
-            "thumb3_joint": 0.0,  # 下限0°（本次未指定，保持）
-            "thumb4_joint": 0,  # +40°（原 0°）（thumb4_hoint 已改名 thumb4_joint）
-            "index1_joint": 0.0,  # -8度，手指略张开防碰
-            "index2_joint": 0,  # 30° 左右预弯
-            "index3_joint": 0.0,  # 10° 预弯
-            "index4_joint": 0.0,  # 10° 预弯
+            # [2026-09-20 预弯手型] 触发条件达成：v3 训练到 1871 iter，contact_gate 始终 0
+            #   （接近阶段死锁）且物理崩坏 → 按预案加预弯，缩短"指尖→对置接触"的探索距离：
+            #   中指/无名指（工作对）j2=0.45、j3=0.2、j4=0.2（半包络）；
+            #   拇指 j1=-30°(-0.5236)、j2=-20°(-0.3491)（向对置方向预置）。
+            #   方向依据：四指正角=弯曲；thumb1/2 负角=侧摆/屈曲（限位 [-π/2,0] / ±π/2）。
+            #   ⚠️ 若 play 见手指反向翻出/穿 cube，调整符号或减小值。
+            "thumb1_joint": -0.6981,  # -40°
+            "thumb2_joint": -1.3962,  # -80°
+            "thumb3_joint": 0.6981,   # +40°
+            "thumb4_joint": 0.6981,   # +40°
+            "index1_joint": -0.087,   # -5°（略张开防碰）
+            "index2_joint": 1.0472,    # 60°
+            "index3_joint": 0.5236,    # 30°
+            "index4_joint": 0.0,       # 0°
             "middle1_joint": 0.0,
-            "middle2_joint": 0.0,  # 30° 左右预弯
-            "middle3_joint": 0.0,  # 10° 预弯
-            "middle4_joint": 0.0,  # 10° 预弯
+            # [2026-09-22 P1 试验记录·已回退] 曾把 middle3 0.4363→0.65、middle2 1.2217→1.20
+            #   试图防穿模（几何扫描证明可行：指尖距面 0.65cm/中节间隙 +0.40cm），但动作是
+            #   "相对默认角"的——改默认导致旧策略抓握失效（gate 0.94→0.47、达标率 23%→0%），
+            #   用户决定回退预设、接受轻微穿模。若将来要再做，需配合一次策略适应训练。
+            "middle2_joint": 1.2217,   # 70°
+            "middle3_joint": 0.4363,   # 25°
+            "middle4_joint": 0.0,      # 0°
             "ring1_joint": 0.0,
-            "ring2_joint": 0.0,  # 30° 左右 预弯
-            "ring3_joint": 0.0,  # 10° 预弯
-            "ring4_joint": 0.0,  # 10° 预弯
-            "little1_joint": 0.0,  # 8度，手指略张开防碰
-            "little2_joint": 0.0,  # 30° 左右 预弯
-            "little3_joint": 0.0,  # 10° 预弯
-            "little4_joint": 0.0,  # 10° 预弯
+            "ring2_joint": 1.0472,     # 60°
+            "ring3_joint": 0.5236,     # 30°
+            "ring4_joint": 0.0,        # 0°
+            "little1_joint": 0.0,
+            "little2_joint": 0.8727,   # 50°
+            "little3_joint": 0.5236,   # 30°
+            "little4_joint": 0.0,      # 0°
+
 
         },
 
@@ -152,15 +165,23 @@ DRILL_UR5E_CFG = ArticulationCfg(
 
             ],
 
-            stiffness=50.0,     # [2026-09-09] 80→50（50g 重训）：力=k×误差，刚度降→接触瞬态冲击力降→轻 cube 不被推飞。
-                                #   50g 门槛 0.245N，刚度 50 绰绰有余（策略多弯补偿稳态力）。
-                                #   历史：40→80 升力成功、80→90 升力崩；本次反向降力（匹配轻 cube）是安全方向。
-                                # [2026-09-14 同步] 本机 80→50：与训练机实际值对齐（用户确认训练机=50）。
-            damping=6.0,        # 随刚度 50：略过阻尼（临界 d≈2√(k·J)≈3.16），接触更柔、更平稳，防轻 cube 振荡
-            effort_limit_sim=2.0,   # [2026-09-14 防"绞死"] URDF 自带 effort=10 Nm（对手指是巨值）：
-                                    #   深穿透时位置控制持续"推" → 推穿力可达 10Nm 级 → 手指绞在
-                                    #   物体/彼此之间 → PhysX 求解爆炸（崩坏时 collection 8s 的嫌疑机制）。
-                                    #   正常操作需求 <1 Nm；2.0 留 2~4 倍余量，不影响抓握。
+            # [2026-09-19 22:30 干预6] stiffness 50→35、damping 6→5：接触刚度再降 30%，
+            #   深压时的接触力峰值更柔（1258 尖峰→1279 崩的物理侧防线）。
+            #   力上限由 effort（0.5 Nm）决定，仍 >10N 指尖力，不影响力封闭。
+            #   回退：50 / 6.0。
+            stiffness=35.0,
+            # [2026-09-21 v5.2 抑颤] damping 5→8：实测关/接触时关节 1~2Hz 摆动
+            #   （middle3 vel_rms 0.51 rad/s、接触力 std 53%）——提高物理阻尼压制。
+            #   回退：5.0。
+            damping=8.0,
+            # [2026-09-21 v5 用户决定] 0.5→1.0 Nm：诊断实证——0.5 在接触下关节被卡死
+            #   （middle3 指令 0.735 / 实际 0.11，err 0.63rad；thumb 中节顶住 cube 时同样跟不上），
+            #   导致"指令在弯、实际被接触几何推直"的怪姿势。1.0 Nm ≈ 指尖 20N（需求 <1N），
+            #   跟踪更好；若再现"深穿→求解挣扎/collection 暴涨"，回退 0.5（历史防深穿值）。
+            effort_limit_sim=1.0,
+            # [2026-09-14 原始注释] URDF 自带 effort=10 Nm（对手指是巨值）：深穿透时位置控制
+                                    #   持续"推" → 推穿力可达 10Nm 级 → 手指绞在物体/彼此之间 →
+                                    #   PhysX 求解爆炸（崩坏时 collection 8s 的嫌疑机制）。
 
         ),
 

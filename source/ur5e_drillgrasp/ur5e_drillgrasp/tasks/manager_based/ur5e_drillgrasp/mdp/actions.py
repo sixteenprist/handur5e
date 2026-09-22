@@ -4,9 +4,12 @@
 """
 自定义动作：手指自由度降维。
 
-分组策略（8D）：拇指4（独立） + 四指共享4（食/中/无/小）。
-共享是"跨指"：四指同一位置的关节（侧摆/掌根/中段/指尖）共用 1 个动作通道；
-层级弯曲是"跨关节"：每指 4 关节仍有 4 个独立通道，四通道值可不同 → 手指逐节卷曲包络
+分组策略（8D）：拇指4（独立） + 中指4（独立）。
+[2026-09-22 v7.10 用户要求] 由"四指共享4"改为"仅中指4"：任务约定只有拇指+中指参与
+  （其余三指资产里无碰撞），共享通道会让食/无/小跟随摆动纯属视觉噪音 → 现在
+  index/ring/little 的目标恒为初始位姿（full_action=0），只有中指逐节卷曲。
+  动作维度仍是 8（拇指4+中指4）、观测维度不变 → 旧 ckpt 兼容（行为等价，三指静止）。
+层级弯曲是"跨关节"：中指 4 关节仍有 4 个独立通道，四通道值可不同 → 逐节卷曲包络
 （v18 教训：掌根弯、中段不弯 → 指尖够不到 → 挤飞；切勿把 4 通道再压成 1 个）。
 """
 
@@ -56,14 +59,7 @@ class GroupedHandAction(ActionTerm):
         self._last_target = self._asset.data.joint_pos.clone()
         self._target_initialized = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
-        # 四指共享映射：action[i]（第 i 关节位）→ 食/中/无/小四指的对应关节一起写同一值
-        self._four_map = []
-        for i in range(self._n_per_finger):
-            group = []
-            for ids in (self._index_ids, self._middle_ids, self._ring_ids, self._little_ids):
-                if i < len(ids):
-                    group.append(ids[i])
-            self._four_map.append(group)
+        # [v7.10] 仅中指接受四指通道；index/ring/little 不再映射（目标恒为初值，保持静止）
 
     @property
     def action_dim(self) -> int:
@@ -106,10 +102,10 @@ class GroupedHandAction(ActionTerm):
                 thumb_flipped[:, :2] = -thumb_act[:, :2]
             full_action[:, self._thumb_ids] = thumb_flipped
 
-        # 四指共享：同一通道值写入四指的对应关节
-        for i, joint_ids in enumerate(self._four_map):
-            if len(joint_ids) > 0:
-                full_action[:, joint_ids] = four_act[:, i:i+1]
+        # [v7.10 用户要求] 四指通道只写"中指"；其余三指 full_action 保持 0 → target=default（初始位姿）
+        if len(self._middle_ids) > 0:
+            n_m = min(4, len(self._middle_ids))
+            full_action[:, self._middle_ids[:n_m]] = four_act[:, :n_m]
 
         # [2026-09-02] 绝对位置控制目标 = 伸直位 + 动作：零动作 target=伸直位，stiffness 持续拉回伸直，
         #   消除"相对控制 joint_pos+action 下零动作 target 跟随当前位置 → 手指自由下垂"的问题。
@@ -164,7 +160,12 @@ class GroupedHandActionCfg(ActionTermCfg):
     max_delta: float = 0.5
     # v66: raw action 裁剪范围（对齐 SoftHand clip）。None=不裁剪；1.0=限制 raw∈[-1,1]。
     # 与 max_delta 双保险：clip 拦 raw 绝对值，max_delta 拦每步目标变化。
-    clip_range: float | None = 1.0
+    # [2026-09-19 力封闭配方] 1.0→1.6：硬编程实测（scripted_grasp v0.18-v0.21）——手指关节
+    #   限位 ±1.57（j2/j3/j4 可达 1.4+），而 raw clip=1.0 把目标卡在 default±1.0 rad（57°），
+    #   四指/拇指"深弯到贴面/绕位"所需行程用不满 → 接触力上不去（历史 opp 仅 0.06~0.28N）。
+    #   1.6 覆盖全部行程（thumb1 限位 -1.57、t2/t3/t4 均 ±1.57）；与 scripted_grasp 的
+    #   --hand_clip 默认值 1.6 对齐。回退：改回 1.0（策略行为会变，需重训）。
+    clip_range: float | None = 1.6
 
 
 # ══════════════════════════════════════════════════════════════
