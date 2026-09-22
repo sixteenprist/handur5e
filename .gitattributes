@@ -1,3 +1,7 @@
+# [2026-09-22 统一换行·用户决定 A] 文本统一 LF（提交/检出均 LF），杜绝 CRLF/LF 混用假 diff。
+# 通用规则放最前，下面特例（LFS / *.bat）按"后写覆盖"继续生效。
+* text=auto eol=lf
+
 *.usd filter=lfs diff=lfs merge=lfs -text
 *.usda filter=lfs diff=lfs merge=lfs -text
 *.psd filter=lfs diff=lfs merge=lfs -text
