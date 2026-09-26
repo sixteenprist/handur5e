@@ -5,7 +5,8 @@
 自定义动作：手指自由度降维。
 
 分组策略（8D）：拇指4（独立） + 中指4（独立）。
-[2026-09-22 v7.10 用户要求] 由"四指共享4"改为"仅中指4"：任务约定只有拇指+中指参与
+[2026-09-22 可扩展] 四指通道落点由 cfg.four_mode 控制（"middle" 默认 / "shared" 四指共享）；
+  [v7.10 用户要求] 默认由"四指共享4"改为"仅中指4"：任务约定只有拇指+中指参与
   （其余三指资产里无碰撞），共享通道会让食/无/小跟随摆动纯属视觉噪音 → 现在
   index/ring/little 的目标恒为初始位姿（full_action=0），只有中指逐节卷曲。
   动作维度仍是 8（拇指4+中指4）、观测维度不变 → 旧 ckpt 兼容（行为等价，三指静止）。
@@ -59,7 +60,19 @@ class GroupedHandAction(ActionTerm):
         self._last_target = self._asset.data.joint_pos.clone()
         self._target_initialized = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
-        # [v7.10] 仅中指接受四指通道；index/ring/little 不再映射（目标恒为初值，保持静止）
+        # [2026-09-22 可扩展·单一开关] 四指通道的落点由 cfg.four_mode 决定：
+        #   "middle"（默认，现状）：只写中指；其余三指目标恒为初值（静止）
+        #   "shared"（历史/四指实验）：同一通道值写入 食/中/无/小 四指对应关节
+        #   （若将来要"四指独立"，需扩动作维度=每指 4 通道，属于改观测/动作维度的重训项）
+        if cfg.four_mode not in ("middle", "shared"):
+            raise ValueError(f"four_mode 只支持 'middle'/'shared'，收到 {cfg.four_mode!r}")
+        self._four_map = []
+        for i in range(self._n_per_finger):
+            group = []
+            for ids in (self._index_ids, self._middle_ids, self._ring_ids, self._little_ids):
+                if i < len(ids):
+                    group.append(ids[i])
+            self._four_map.append(group)
 
     @property
     def action_dim(self) -> int:
@@ -88,6 +101,12 @@ class GroupedHandAction(ActionTerm):
     def apply_actions(self):
         """将策略动作映射为手指关节位置目标（绝对位置控制：伸直位 + 动作，关节空间 rad）。"""
         actions = self._raw_actions * self.cfg.scale  # 关节空间，单位 rad
+        # [v21 用户要求] 冻结指定通道（动作恒 0 → 目标恒为默认角）：用于钉住拇指 t2，
+        #   不让它被接触推/策略过弯（用户观察 t2 漂到 -1.6 扫出侧面）。
+        if len(self.cfg.frozen_channels) > 0:
+            frozen = list(self.cfg.frozen_channels)
+            actions[:, frozen] = 0.0
+            self._raw_actions[:, frozen] = 0.0
 
         thumb_act = actions[:, :self._n_thumb]
         four_act = actions[:, self._n_thumb:self._n_thumb + 4]
@@ -102,10 +121,15 @@ class GroupedHandAction(ActionTerm):
                 thumb_flipped[:, :2] = -thumb_act[:, :2]
             full_action[:, self._thumb_ids] = thumb_flipped
 
-        # [v7.10 用户要求] 四指通道只写"中指"；其余三指 full_action 保持 0 → target=default（初始位姿）
-        if len(self._middle_ids) > 0:
-            n_m = min(4, len(self._middle_ids))
-            full_action[:, self._middle_ids[:n_m]] = four_act[:, :n_m]
+        if self.cfg.four_mode == "middle":
+            # [v7.10 用户要求·默认] 四指通道只写"中指"；其余三指 full_action=0 → target=初始位姿
+            if len(self._middle_ids) > 0:
+                n_m = min(4, len(self._middle_ids))
+                full_action[:, self._middle_ids[:n_m]] = four_act[:, :n_m]
+        else:  # "shared"：历史四指共享（食/中/无/小 同一通道值）
+            for i, joint_ids in enumerate(self._four_map):
+                if len(joint_ids) > 0:
+                    full_action[:, joint_ids] = four_act[:, i:i+1]
 
         # [2026-09-02] 绝对位置控制目标 = 伸直位 + 动作：零动作 target=伸直位，stiffness 持续拉回伸直，
         #   消除"相对控制 joint_pos+action 下零动作 target 跟随当前位置 → 手指自由下垂"的问题。
@@ -146,6 +170,9 @@ class GroupedHandActionCfg(ActionTermCfg):
     """手指分组动作的配置类。"""
     class_type: type[ActionTerm] = GroupedHandAction
     asset_name: str = "robot"
+    # [2026-09-22 可扩展·单一开关] 四指通道的落点：
+    #   "middle" = 仅中指（当前任务/默认，其余三指静止）；"shared" = 四指共享（历史行为/四指实验）
+    four_mode: str = "middle"
     # [2026-09-15 对齐·防呆] 原默认值 0.05，但 env_cfg 一直显式传入 1.0（实际生效值 = 1.0；
     #   0.05 从未生效，曾被误读为"手指动程仅 ±3°"的警报源）。改为与实例值一致，防再次误读。
     scale: float = 1.0
@@ -158,6 +185,8 @@ class GroupedHandActionCfg(ActionTermCfg):
     #   调节方向：S2 接触冲击大（弹开 cube）→ 收紧 0.3；手部响应迟钝/截断过频 → 放宽 0.7。
     #   ⚠️ 不要 <0.2：限幅过紧会截断探索动作 → 策略行为与输出脱节、std 膨胀（v70 教训的另一面）。
     max_delta: float = 0.5
+    # [v21] 冻结的手部通道下标（0-7：拇指1-4=0-3，四指=4-7）；空=不冻结。
+    frozen_channels: tuple = ()
     # v66: raw action 裁剪范围（对齐 SoftHand clip）。None=不裁剪；1.0=限制 raw∈[-1,1]。
     # 与 max_delta 双保险：clip 拦 raw 绝对值，max_delta 拦每步目标变化。
     # [2026-09-19 力封闭配方] 1.0→1.6：硬编程实测（scripted_grasp v0.18-v0.21）——手指关节
