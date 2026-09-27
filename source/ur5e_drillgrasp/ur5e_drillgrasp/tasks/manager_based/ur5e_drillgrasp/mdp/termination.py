@@ -94,3 +94,23 @@ def cube_out_of_bounds(
 def time_out(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Episode 超时（框架自动管理）。"""
     return env.episode_length_buf >= env.max_episode_length - 1
+
+def cube_xy_drift_exceeded(
+    env: ManagerBasedRLEnv,
+    thresh: float = 0.04,
+) -> torch.Tensor:
+    """[v34b xy解锁] cube 横向漂移超限 → 终止该 episode。
+
+    v34 确定性诊断：策略学出"单侧拇指硬推、边抬边把 cube 拖走 18cm"的退化解
+    （drift 惩罚饱和后仍划算）。本终止让"拖走"直接失败（无回报），逼出稳定捏持。
+    参考：每集开始（episode_length_buf<=1）缓存 xy。thresh=4cm。
+    """
+    obj: RigidObject = env.scene["cube_obj"]
+    ppos = obj.data.root_pos_w
+    if not hasattr(env, "_cube_xy_term_ref") or env._cube_xy_term_ref.shape[0] != ppos.shape[0]:
+        env._cube_xy_term_ref = ppos[:, :2].clone()
+    if hasattr(env, "episode_length_buf") and env.episode_length_buf is not None:
+        rm = env.episode_length_buf <= 1
+        if torch.any(rm):
+            env._cube_xy_term_ref[rm] = ppos[rm, :2]
+    return torch.norm(ppos[:, :2] - env._cube_xy_term_ref, dim=-1) > thresh

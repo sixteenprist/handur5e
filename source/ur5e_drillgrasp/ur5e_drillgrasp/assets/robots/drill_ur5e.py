@@ -108,7 +108,9 @@ DRILL_UR5E_CFG = ArticulationCfg(
             "thumb3_joint": 0.8727,
             "thumb4_joint": 0.6981,   # +40°
             "index1_joint": -0.087,   # -5°（略张开防碰）
-            "index2_joint": 1.0472,    # 60°
+            # [v33 四指模式·用户要求] 食/无/小 j2 也收敛到 30°（与中指一致，四指齐平）。
+            #   回退：index2 1.0472(60°) / ring2 1.0472(60°) / little2 0.8727(50°)。
+            "index2_joint": 0.5236,    # 30°
             "index3_joint": 0.5236,    # 30°
             "index4_joint": 0.0,       # 0°
             "middle1_joint": 0.0,
@@ -126,11 +128,11 @@ DRILL_UR5E_CFG = ArticulationCfg(
             "middle3_joint": 0.5236,   # 30°
             "middle4_joint": 0.0,      # 0°
             "ring1_joint": 0.0,
-            "ring2_joint": 1.0472,     # 60°
+            "ring2_joint": 0.5236,     # 30°
             "ring3_joint": 0.5236,     # 30°
             "ring4_joint": 0.0,        # 0°
             "little1_joint": 0.0,
-            "little2_joint": 0.8727,   # 50°
+            "little2_joint": 0.5236,   # 30°
             "little3_joint": 0.5236,   # 30°
             "little4_joint": 0.0,      # 0°
 

@@ -26,9 +26,11 @@ _FINGERTIP_NAMES = ["thumb4", "index4", "middle4", "ring4", "little4"]
 
 # [2026-09-22 可扩展·单一开关] 任务参与手指：以后做"中指→四指"实验，只改这两行即可
 #   （配合资产碰撞、GroupedHandAction.four_mode、动作空间；奖励函数均已参数化并默认引用本开关）
-ACTIVE_TIP_NAMES = ("thumb4", "middle4")   # 参与"表面贴近/对置对齐"类奖励的指尖（当前：拇指+中指）
-ACTIVE_FOUR_INDICES = (2,)                 # _FINGERTIP_NAMES 下标集合=四指组成员
-                                           #   当前仅中指=(2,)；四指共享/独立实验=(1,2,3,4)
+# [v33 四指模式·用户决定] 切换为"四指共享+拇指"：
+#   ACTIVE_TIP_NAMES=全部 5 指尖（拇指 + 食/中/无/小）；ACTIVE_FOUR_INDICES=(1,2,3,4)。
+#   回退（中指单指模式）：("thumb4","middle4") / (2,)。
+ACTIVE_TIP_NAMES = ("thumb4", "index4", "middle4", "ring4", "little4")
+ACTIVE_FOUR_INDICES = (1, 2, 3, 4)
 
 # Cube 半边长 (m)：6cm 边长的一半；rewards 也复用本常量
 _CUBE_HALF_SIZE = 0.03

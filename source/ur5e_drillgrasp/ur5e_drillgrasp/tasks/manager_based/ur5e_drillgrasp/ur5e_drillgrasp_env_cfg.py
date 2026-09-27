@@ -207,8 +207,11 @@ class ActionsCfg:
     hand_action = mdp.GroupedHandActionCfg(
         asset_name="robot",
         scale=1.0,
-        # [v31c 用户要求] t2 解冻：xy 自由 + 远起 8cm 已稳(提11.9/succ3.9)，试恢复
-        #   通道自由（若"拇指躲开/过弯"复发 → 回 (1,)）。
+        # [v33 四指模式] "middle"→"shared"：四通道同时驱动 食/中/无/小（共享）。
+        #   回退："middle"。
+        four_mode="shared",
+        # [v35 解冻 t2] 保持相对姿势阶段已稳(四指版 提14.2cm/漂移2cm) → 恢复通道自由
+        #   （若"拇指躲开/过弯"复发 → 回 (1,)）。
         frozen_channels=(),
         # [2026-09-19 22:20 慢速压进·干预2] max_delta 0.5→0.3：每步目标角变化限幅收紧
         #   → 手指压向 cube 的速度更慢（天然柔化接触冲击、减少深穿透）。
@@ -351,7 +354,7 @@ class EventCfg:
     reset_arm_far = EventTerm(
         func=mdp.reset_arm_far,
         mode="reset",
-        # [v32 远起放大] 0.7(≈8cm)→1.0(≈11.6cm)；用户要求"再远点"，摩擦/质量不动(真机可部署)。
+        # [v37c 课程放大] 0.7(8cm)已稳(lift11.6/succ3.8) → 1.0(≈11.6cm)。回退 0.7。
         params={"scale": 1.0, "noise": 0.05},
     )
     # [v19d 拇指 reset 课程] 50% episode 从"拇指已摆到可捏姿态"出发
@@ -900,7 +903,7 @@ class RewardsCfg:
     #   回退：weight=0。
     tcp_reach: RewTerm = RewTerm(
         func=mdp.tcp_reach_reward,
-        # [v26b] 2.0→1.5：降低与捏提链的拉扯。回退 2.0。
+        # [v36 接近阶段] 重开接近奖励（配合远起 0.15）。回退：0.0。
         weight=1.5,
         params={"sigma": 0.10},
     )
@@ -934,7 +937,9 @@ class RewardsCfg:
     #   全程闭拢 10cm≈2.5 分；停住=0、远离=负，每步梯度大且可达。回退：weight=0。
     tip_progress: RewTerm = RewTerm(
         func=mdp.tip_progress_reward,
-        weight=25.0,
+        # [v37 奖励瘦身 A/B·用户要求] 12→0：验证"去掉逐帧进度"是否影响学习/最终指标，
+        #   并消除"cube 滑动→假进度"的投机源。回退：12（四指）/25（双指）。
+        weight=0.0,
         params={"metric": "box"},   # [v16] 与 surface 一致用盒面距离
     )
     # ---- 提起链（链尾，× 门控）----
@@ -997,7 +1002,8 @@ class RewardsCfg:
     )
     cube_drift: RewTerm = RewTerm(
         func=mdp.cube_drift_penalty,
-        weight=-0.8,
+        # [v34b] -0.8→-1.5：配合漂移终止，把"推走"彻底变负收益。
+        weight=-1.5,
         params={"d_std": 0.02},
     )
 
@@ -1070,6 +1076,12 @@ class TerminationsCfg:
     cube_out_of_bounds = DoneTerm(
         func=mdp.cube_out_of_bounds,
         params={"z_min": 0.5, "z_max": 1.3},
+    )
+    # [v34b xy解锁] cube 横向漂移 >4cm → 终止（治"边抬边拖走"退化解）。
+    #   回退（允许搬运）：删除本项。
+    cube_drift_limit = DoneTerm(
+        func=mdp.cube_xy_drift_exceeded,
+        params={"thresh": 0.04},
     )
     # [2026-09-19 22:55 干预8] 深穿隔离：任一指尖接触力 >1.5N（正常 <1N）即终止。
     fingertip_overload = DoneTerm(
