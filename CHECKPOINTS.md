@@ -1,4 +1,4 @@
-# UR5e 抓取项目 · Checkpoint 索引（2026-09-25 整理）
+# UR5e 抓取项目 · Checkpoint 索引（2026-09-25 初版 / 2026-09-27 补充四指线）
 
 > 用途：把 `logs/rsl_rl/ur5e_grasp_v5/best/` 里的"最佳节点"映射回原始 run 目录与 `model_<iter>.pt`，
 > 并记录各自的战绩与所需配置。映射方法：读取 ckpt 内部 `iter` 字段 + 对原始文件做 md5 内容校验。
@@ -67,10 +67,40 @@ python scripts/rsl_rl/train.py --task Template-Ur5e-Drillgrasp-v0 --num_envs 204
 | `grasp_v29_far3.5cm.pt` | `2026-09-25_19-21-05/model_1885.pt` | lift 11.9 / succ 3.5 | 远起 scale 0.3（≈3.5cm） |
 | **`grasp_v29_far6cm.pt`** | **`2026-09-25_19-51-28/model_2215.pt`** | **全流程最佳**：远起≈6cm → 接近 → 捏 0.5-0.7N → **提 +10.8cm**（确定性，仍上升） | 远起 scale 0.5、face_reach 3.0、t2 冻结 |
 
-## 当前建议起点（xy 解锁用）
+## ⑤ v30 xy 解锁线（中指+拇指；去掉 xy 锁定后）
 
-- **主选**：`grasp_v29_far6cm.pt`（= `2026-09-25_19-51-28/model_2215.pt`）——与新资产/多段碰撞/预设完全匹配，且含"远起→接近→捏→提"全流程。
-- **对照**：`grasp_v24_retreat_3abc.pt`（捏力最强，但无接近、t2 自由）。
+| best 文件 | 原始（run/model） | 战绩 | 配置要点 |
+|---|---|---|---|
+| `grasp_v30_unlock_v1.pt` | `2026-09-25_23-48-46/model_2930.pt` | 首次"xy 自由也能提" | 删 cube_xy_clamp + cube_motion |
+| `grasp_v30_unlock_v2_drift24mm.pt` | `2026-09-26_00-57-47/model_3655.pt` | 确定性 提+12.7cm / 漂移 2.4cm | 加 cube_drift -0.8 |
+| `grasp_v30_unlock_v3_drift15mm.pt` | `2026-09-26_11-46-17/model_11700.pt` | 确定性 提+12.4cm / 漂移1.5cm、力0.78/1.04N | drift -1.5、lr 3e-5 |
+
+## ⑥ v31 t2 自由 + 远起 8cm（中指+拇指）
+
+| best 文件 | 原始（run/model） | 战绩 | 配置要点 |
+|---|---|---|---|
+| `grasp_v31_t2free_far8cm.pt` | `2026-09-26_12-38-13/model_13025.pt` | 确定性 捏0.68N / 提+9.5cm / 漂移1.9cm | t2 解冻、远起 scale 0.7 |
+
+## ⑦ 四指共享+拇指线（当前方向；食/中/无/小 j2=j3=30°、四指全碰撞）
+
+| best 文件 | 原始（run/model） | 战绩 | 配置要点 |
+|---|---|---|---|
+| `grasp_v34_4finger_v1.pt` | `2026-09-26_17-12-20/model_2125.pt` | 首次四指捏提（有"拖拽"漏洞，留档） | 近起、t2 冻结、xy 自由 |
+| `grasp_v34b_4finger_drift_fix.pt` | `2026-09-26_20-26-23/model_2765.pt` | **确定性 提+14.2cm / 漂移≤2.8cm** | +漂移>4cm 终止、drift -1.5 |
+| `grasp_v35_4finger_t2free.pt` | `2026-09-27_02-50-58/model_3010.pt` | 确定性 提+13.3cm / 漂移2.3cm | t2 解冻 |
+| `grasp_v36_4finger_reach015.pt` | `2026-09-27_03-17-03/model_3315.pt` | 训练 lift13.0 / succ3.94 | 开 reach、远起 0.15 |
+| `grasp_v36b_4finger_reach035.pt` | `2026-09-27_03-47-27/model_3665.pt` | lift11.7 / succ3.45 | 远起 0.3 |
+| `grasp_v36c_4finger_reach06cm.pt` | `2026-09-27_04-22-35/model_4225.pt` | lift9.9 / succ3.1 | 远起 0.5 |
+| `grasp_v37_slim_noreach06cm.pt` | `2026-09-27_16-06-30/model_11005.pt` | 瘦身生效：lift11.5 / succ3.76 | tip_progress=0 |
+| `grasp_v37b_slim_far8cm.pt` | `2026-09-27_16-48-36/model_11375.pt` | lift11.6 / succ3.77 | 远起 0.7 |
+| **`grasp_v37c_slim_far116cm.pt`** | **`2026-09-27_17-23-44/model_11715.pt`** | **四指线最佳**：确定性 12cm 远起→捏(拇0.8N)→提+13.4cm / 漂移≤1.8cm；训练 lift13.4 / succ4.36 | 远起 1.0 |
+| `grasp_v38_4finger_multicol.pt` | `2026-09-27_18-34-05/model_12005.pt` | 食/无/小 2/3 段碰撞开启后微调：lift12.9 / succ4.18、确定性 提+13.4cm / 漂移≤1.8cm | 全碰撞 |
+
+## 当前建议起点（四指线）
+
+- **主选**：`grasp_v37c_slim_far116cm.pt`（= `2026-09-27_17-23-44/model_11715.pt`）——四指线验证最佳：12cm 远起 + 全流程 + 漂移≤1.8cm。
+- **全碰撞版**：`grasp_v38_4finger_multicol.pt`（食/无/小 2/3 段碰撞开启后的微调版）。
+- **对照**：`grasp_v34b_4finger_drift_fix.pt`（近起、确定性提起最高 +14.2cm）。
 
 ## 附：如何复现映射
 
@@ -81,4 +111,4 @@ print(ck["iter"])
 ```
 
 ---
-_整理时间：2026-09-25 · 映射经 md5 内容校验；`best/` 文件与原始文件内容一致（除注明"原始已覆盖"者）。_
+_整理时间：2026-09-25（初版）+ 2026-09-27（补 v30~v38）· 映射经 md5 内容校验；`best/` 文件与原始文件内容一致（除注明"原始已覆盖"者）。_
