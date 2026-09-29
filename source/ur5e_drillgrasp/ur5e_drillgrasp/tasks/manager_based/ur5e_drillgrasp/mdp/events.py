@@ -127,3 +127,36 @@ def reset_arm_far(
         pos[:, ids[1]] += -0.25 * scale + (torch.rand(n, device=dev) * 2 - 1) * noise
     vel = asset.data.joint_vel[env_ids].clone()
     asset.write_joint_state_to_sim(pos, vel, env_ids=env_ids)
+
+
+def reset_arm_prepose(
+    env: ManagerBasedEnv,
+    env_ids,
+    pose_scale: float = 1.0,
+    noise: float = 0.01,
+    offsets: tuple = (
+        ("shoulder_pan_joint", -0.058), ("shoulder_lift_joint", 0.05), ("elbow_joint", 0.093),
+        ("wrist_1_joint", -0.279), ("wrist_2_joint", -0.198), ("wrist_3_joint", -0.012),
+    ),  # [v46] 手部预闭合改由 curriculum_hand_preclose_anneal 改 default_joint_pos 承担（持久）
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> None:
+    """[v45 易起课程] 接触预备位：把臂+手推到"学好的抓取策略接触前一瞬的姿态"附近。
+
+    实测（v39 远起 rollout t=20，指尖距盒面 1.0~1.8cm、q≈0.96）：相对默认姿态的偏移如上——
+    关键在腕 1 −0.28 / 腕 2 −0.20（重新对向）与拇 4 反向 −0.67、四指 j2 +0.28/j3 +0.11。
+    动机：脚本闭拢探针证明标定悬停位"直闭拢"指尖差 1.4~2cm 够不到盒面（v34 旧碰撞下可够，
+    v38 全碰撞后从零探索不出去）。此预备位让"闭拢→接触"重新可达，课程 pose_scale 1→0
+    在学会抓取（success EMA≥0.5）后自动退掉 → 最终回到标定悬停 + 远起分布。
+    放在 reset_middle/thumb_curriculum 之后（在其预设基础上叠加）。
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    pos = asset.data.joint_pos[env_ids].clone()
+    n = len(env_ids)
+    dev = pos.device
+    for name, delta in offsets:
+        if name not in asset.joint_names:
+            continue
+        i = asset.joint_names.index(name)
+        pos[:, i] += pose_scale * float(delta) + (torch.rand(n, device=dev) * 2 - 1) * noise
+    vel = asset.data.joint_vel[env_ids].clone()
+    asset.write_joint_state_to_sim(pos, vel, env_ids=env_ids)

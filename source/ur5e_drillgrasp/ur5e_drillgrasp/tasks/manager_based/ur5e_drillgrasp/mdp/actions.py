@@ -105,8 +105,10 @@ class GroupedHandAction(ActionTerm):
         #   不让它被接触推/策略过弯（用户观察 t2 漂到 -1.6 扫出侧面）。
         if len(self.cfg.frozen_channels) > 0:
             frozen = list(self.cfg.frozen_channels)
-            actions[:, frozen] = 0.0
-            self._raw_actions[:, frozen] = 0.0
+            # [v47 软解冻] thaw 0=完全冻结(原行为)；课程可 0→1 渐变放开，避免"突然放开→跳变"。
+            thaw = float(getattr(self.cfg, "thaw", 0.0))
+            actions[:, frozen] = actions[:, frozen] * thaw
+            self._raw_actions[:, frozen] = self._raw_actions[:, frozen] * thaw
 
         thumb_act = actions[:, :self._n_thumb]
         four_act = actions[:, self._n_thumb:self._n_thumb + 4]
@@ -187,6 +189,8 @@ class GroupedHandActionCfg(ActionTermCfg):
     max_delta: float = 0.5
     # [v21] 冻结的手部通道下标（0-7：拇指1-4=0-3，四指=4-7）；空=不冻结。
     frozen_channels: tuple = ()
+    # [v47 软解冻] 冻结通道的放行系数：0=全冻（默认原行为）；课程 0→1 渐变放开。
+    thaw: float = 0.0
     # v66: raw action 裁剪范围（对齐 SoftHand clip）。None=不裁剪；1.0=限制 raw∈[-1,1]。
     # 与 max_delta 双保险：clip 拦 raw 绝对值，max_delta 拦每步目标变化。
     # [2026-09-19 力封闭配方] 1.0→1.6：硬编程实测（scripted_grasp v0.18-v0.21）——手指关节

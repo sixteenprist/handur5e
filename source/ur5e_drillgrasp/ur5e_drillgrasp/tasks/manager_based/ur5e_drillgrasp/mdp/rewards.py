@@ -539,20 +539,56 @@ def whole_hand_reach_reward(env: ManagerBasedRLEnv, std: float = 0.3) -> torch.T
     return 1.0 - torch.tanh(d / std)
 
 
-def _contact_gate(env: ManagerBasedRLEnv, scale: float = 0.1) -> torch.Tensor:
-    """(N,) 接触门控 0~1：对向力 min(拇指侧, 工作对侧) 的 tanh 软化。
+def _good_contact(
+    env: ManagerBasedRLEnv,
+    thr: float = 0.15,
+    k: int = 1,
+    soft: float = 0.05,
+) -> torch.Tensor:
+    """[v39 DexSuite 式] 每指阈值 + 计数门控（平滑 0~1，替掉旧"求和取 min"）。
 
-    [DexSuite contacts() 同构] 没形成对向抓握 → 后续提起/成功奖励为 0。
-    scale=0.1N：0.05N→0.46、0.1N→0.76、0.26N（提起所需）→0.93、0.5N→0.98。
+    开源对照（IsaacLab DexSuite::contacts）：逐指力阈值，条件 = 拇指>阈值 且
+      (食|中|无)至少一根>阈值；并门控任务/姿态奖励。旧实现"四指求和"会让多根
+      弱接触凑数（实测 拇0.65+食0.23+小0.12 即解锁提起 → "只有拇指接触也起提"）。
+      per_i = sigmoid((|F_i| − thr)/soft)  → 四指各自"在接触"的软计数
+      gate4 = sigmoid((Σ per_i − k)/0.5)  → 至少 k 根（k=1 DexSuite；k=4 四指全接触）
+      gateT = sigmoid((|F_thumb| − thr)/soft)
+      return gateT × gate4
+    阈值：thr=0.15N、soft=0.05（本任务力 0.1~0.9N 量级）。回退：旧的 min 求和版。
     """
-    F_py, F_ny = _opposition_components(env)
-    opp = torch.minimum(F_py, F_ny)
-    return torch.tanh(opp / scale)
+    forces = _fingertip_force_vectors(env)                 # (N,5,3)
+    mag = torch.norm(forces, dim=-1)                        # (N,5)
+    thumb = mag[:, 0]
+    four = mag[:, list(ACTIVE_FOUR_INDICES)]
+    per = torch.sigmoid((four - thr) / soft)
+    cnt = per.sum(dim=-1)
+    gate4 = torch.sigmoid((cnt - float(k)) / 0.5)
+    gateT = torch.sigmoid((thumb - thr) / soft)
+    return gateT * gate4
 
 
-def contact_gate_reward(env: ManagerBasedRLEnv, scale: float = 0.1) -> torch.Tensor:
-    """(N,) "抓住"的即时奖励 = 门控值本身（0~1）。给策略一个先学会对向接触的密集信号。"""
-    return _contact_gate(env, scale)
+def _contact_gate(
+    env: ManagerBasedRLEnv,
+    scale: float = 0.1,
+    thr: float = 0.15,
+    k: int = 1,
+    soft: float = 0.05,
+) -> torch.Tensor:
+    """(N,) 接触门控 0~1：[v39] 改为 DexSuite 式"每指阈值+计数"（见 _good_contact）。
+    scale 参数保留仅为兼容旧调用（不再使用）。
+    """
+    return _good_contact(env, thr=thr, k=k, soft=soft)
+
+
+def contact_gate_reward(
+    env: ManagerBasedRLEnv,
+    scale: float = 0.1,
+    thr: float = 0.15,
+    k: int = 1,
+    soft: float = 0.05,
+) -> torch.Tensor:
+    """(N,) "抓住"的即时奖励 = 门控值本身（0~1）。[v39] 参数透传给 DexSuite 式门控。"""
+    return _contact_gate(env, scale=scale, thr=thr, k=k, soft=soft)
 
 
 def _lift_gain(env: ManagerBasedRLEnv, max_height: float) -> torch.Tensor:
@@ -585,10 +621,22 @@ def _contact_alignment(env: ManagerBasedRLEnv, force_thresh: float = 0.03) -> to
     return f_y.sum(dim=-1) / den
 
 
+# [v46 课程化] 提起门控参数（全局，课程函数直接渐变；reward term 的 params 有签名校验放不下）
+GATE_LIFT = {"deadzone": 0.10, "scale": 0.15}
+
+
+def _gate_lift_params(env: ManagerBasedRLEnv) -> tuple[float, float]:
+    """[v46 课程化] 提起门控参数（deadzone/scale）：全局 GATE_LIFT 单一来源，课程可渐变。
+
+    最终语义 0.35/0.2；从头跑起步 0.10/0.15（轻触即可拿提起分，学会后收紧）。
+    """
+    return float(GATE_LIFT["deadzone"]), float(GATE_LIFT["scale"])
+
+
 def _lift_gate(
     env: ManagerBasedRLEnv,
-    deadzone: float = 0.06,
-    scale: float = 0.2,
+    deadzone: float | None = None,   # None=读课程参数（contact_gate.lift_deadzone）
+    scale: float | None = None,      # None=读课程参数（contact_gate.lift_scale）
     ema_alpha: float = 0.1,
 ) -> torch.Tensor:
     """(N,) 提起专用门控：**持续**对向力死区 × 力方向对齐 —— 短暂接触/掌心托举拿不到 lift 分。
@@ -605,11 +653,15 @@ def _lift_gate(
         持续夹持（≥0.3s）→ ema≈opp，收益不变；瞬时碰/抛/掌心托 → ema 远低于死区 → 0 分。
       与用户要求一致："力足够且稳定，再去把 cube 提起"。回退：ema_alpha=1.0（纯瞬时）。
     """
-    F_py, F_ny = _opposition_components(env)
-    opp = torch.minimum(F_py, F_ny)
-    if not hasattr(env, "_opp_ema") or env._opp_ema.shape[0] != opp.shape[0]:
-        env._opp_ema = torch.zeros_like(opp)
-    env._opp_ema = ema_alpha * opp + (1.0 - ema_alpha) * env._opp_ema
+    # [v39] 对向力来源改为 DexSuite 式"每指阈值+计数"质量 q（0~1），EMA 同样作用在 q 上
+    if deadzone is None or scale is None:
+        _dz, _sc = _gate_lift_params(env)
+        deadzone = _dz if deadzone is None else deadzone
+        scale = _sc if scale is None else scale
+    q = _good_contact(env)
+    if not hasattr(env, "_opp_ema") or env._opp_ema.shape[0] != q.shape[0]:
+        env._opp_ema = torch.zeros_like(q)
+    env._opp_ema = ema_alpha * q + (1.0 - ema_alpha) * env._opp_ema
     if hasattr(env, "episode_length_buf") and env.episode_length_buf is not None:
         rm = env.episode_length_buf <= 1
         if torch.any(rm):
@@ -748,9 +800,8 @@ def lift_without_grip_penalty(
         if torch.any(rm):
             env._cube_z_start = torch.where(rm, z, env._cube_z_start)
     gain = torch.clamp(z - env._cube_z_start - deadzone, min=0.0, max=max_height) / max_height
-    F_py, F_ny = _opposition_components(env)
-    opp = torch.minimum(F_py, F_ny)
-    weak = 1.0 - torch.tanh(opp / force_ref)
+    # [v39] 与门控同口径：弱 = 1 − good_contact（每指阈值+计数质量）
+    weak = 1.0 - _good_contact(env)
     return gain * weak
 
 
@@ -820,12 +871,31 @@ def tip_progress_reward(
 
 def lift_height_reward(env: ManagerBasedRLEnv, max_height: float = 0.08, scale: float = 0.2) -> torch.Tensor:
     """(N,) 提起链尾：净提升（8cm 饱和）× 带死区提起门控——没真夹住一分不给。"""
-    return _lift_gain(env, max_height) * _lift_gate(env, scale=scale)
+    return _lift_gain(env, max_height) * _lift_gate(env)
 
 
 def lift_success_reward(env: ManagerBasedRLEnv, max_height: float = 0.08, scale: float = 0.2) -> torch.Tensor:
     """(N,) 提起达标：净提升 ≥ max_height 且真夹住（死区门控）→ 1（持续给，不终止）。"""
-    return (_lift_gain(env, max_height) >= 1.0).float() * _lift_gate(env, scale=scale)
+    return (_lift_gain(env, max_height) >= 1.0).float() * _lift_gate(env)
+
+
+def lift_conform_reward(
+    env: ManagerBasedRLEnv,
+    sigma: float = 0.05,
+    max_height: float = 0.08,
+) -> torch.Tensor:
+    """[v39 任务项·用户要求] 提起期四指"顺应"：cube 离桌后奖励四指尖贴近/贴住。
+
+    用户口径：起提瞬间允许 2-3 指先接触；提起稳定过程中四指要顺应地收拢贴住。
+      gain = _lift_gain(0~1，cube 离桌才开始) → 只在提起期生效，不干扰起提瞬间；
+      per_i = 1 − tanh(盒面距离_i / 0.05)（四指，ACTIVE_FOUR_INDICES）
+      return gain × mean(per)
+    weight≈1.5；回退：weight=0。
+    """
+    gain = _lift_gain(env, max_height)
+    tips = [_FINGERTIP_NAMES[i] for i in list(ACTIVE_FOUR_INDICES)]
+    per = [1.0 - torch.tanh(_tip_cube_box_dist(env, n) / sigma) for n in tips]
+    return gain * torch.stack(per, dim=0).mean(dim=0)
 
 
 def surface_proximity_reward(

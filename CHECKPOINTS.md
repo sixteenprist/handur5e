@@ -96,9 +96,35 @@ python scripts/rsl_rl/train.py --task Template-Ur5e-Drillgrasp-v0 --num_envs 204
 | **`grasp_v37c_slim_far116cm.pt`** | **`2026-09-27_17-23-44/model_11715.pt`** | **四指线最佳**：确定性 12cm 远起→捏(拇0.8N)→提+13.4cm / 漂移≤1.8cm；训练 lift13.4 / succ4.36 | 远起 1.0 |
 | `grasp_v38_4finger_multicol.pt` | `2026-09-27_18-34-05/model_12005.pt` | 食/无/小 2/3 段碰撞开启后微调：lift12.9 / succ4.18、确定性 提+13.4cm / 漂移≤1.8cm | 全碰撞 |
 
+## ⑧ 自动课程线（v39~v48：代码内课程，一条命令从头跑到最终部署）
+
+目标：把"人工接力课程"写进代码——一次 `train.py` 从随机权重跑到最终分布，全自动、可复现。
+关键机制（`mdp/curriculum.py` + `ur5e_drillgrasp_env_cfg.py::CurriculumCfg`）：
+- 信号：`lift_success` 的逐环境 EMA（α=0.001）；所有判定"阈值+连续 3 次确认"；退火期全程"退化即暂停"（EMA<0.35 冻结进度）。
+- 易起脚手架（从头期；学会后自动退）：`reset_arm_prepose` 臂腕"接触预备位"（腕1 −0.28/腕2 −0.20 等）+ `curriculum_hand_preclose_anneal` 手部预闭合（改 default 关节位=动作目标，持久）。解决"直闭拢指尖差 1.4~2cm 够不到盒面"的从零探索死结。
+- 远起阶梯 `arm_far`：0→0.15→0.3→0.5→0.7→1.0（EMA≥0.45、每档≥5000 步、只升不降、续训自动对齐）。
+- 先松后严（EMA≥0.5）：`contact_gate.thr` 0.03→0.15；提门 `GATE_LIFT` 0.10/0.15→0.35/0.2；`cube_motion` 0→−0.8；`cube_drift` 0→−1.5。
+- 串行退火链：soft unfreeze（t2 thaw 0→1，20000 步防跳变）→ `tip_progress` 12→0（12000）→ `tcp_reach` 1.5→0.5（12000）。
+- `thumb_face_reach` **保留 3.0 不再退火**（实测退到 0 的瞬间策略崩：gate 1.23→0.036）。
+
+| 阶段 | 事件 | 结论 |
+|---|---|---|
+| v39~v40 | k=1 门控+顺形；续训验证课程（梯对齐 4/4、face_reach/tcp 退火不塌） | 课程机制可用；修 `EventManager` 无 `_terms` 的 API 错 |
+| v41~v44 | 从头跑 4 配方（t2 自由/冻结、tip 0/12、近起/远起、惩罚渐入）全部卡"悬停"（gate 0.02） | 现碰撞+严门控下"直接从零闭拢"探索不出去 → 需要易起起点 |
+| v45h | 加预备位+预闭合后从头成功起飞（~2800 轮 pinch） | 方案有效；但 face_reach→0 崩、二值解冻崩 |
+| **v48 清跑** | **`logs/train_v48_clean.log`（run `2026-09-29_16-48-51`）：16:48→01:31 ≈8.7h 全自动零干预，走完全链条** | 交付权重 `best/grasp_v48_clean_autofinal.pt`（=model_4520） |
+
+**v48 确定性验收（100 集，最终部署配置：curriculum=None、预备位/预闭合=0、thr0.15、提门0.35/0.2、motion−0.8/drift−1.5、tip0、tcp0.5、face_reach3.0、t2 自由）**：
+- 成功率 **100/100 = 100%**；提起 **mean 12.6cm / min 10.2cm**；
+- 首次达 8cm 瞬间对向力：拇 **0.59N（min 0.50）**、四指 max **0.39N**；该瞬间 **xy 漂移 0.0cm**；
+- 全程（含提起后保持期）xy 漂移 mean 3.3 / max 4.0cm（提起后滑动=此前用户定"先不管"项）。
+
+> ⚠️ 部署/评测必须用"末态配置"（curriculum=None + 上列末值 + `frozen_channels=()`），不能用 cfg 文件里的"起始易值"（会分布错配，成功率骤降）。
+
 ## 当前建议起点（四指线）
 
-- **主选**：`grasp_v37c_slim_far116cm.pt`（= `2026-09-27_17-23-44/model_11715.pt`）——四指线验证最佳：12cm 远起 + 全流程 + 漂移≤1.8cm。
+- **主选（自动课程交付）**：`grasp_v48_clean_autofinal.pt`（= `2026-09-29_16-48-51/model_4520.pt`）——代码内全自动课程从零跑出、100% 验收。
+- 四指线手动最佳：`grasp_v37c_slim_far116cm.pt`（= `2026-09-27_17-23-44/model_11715.pt`）——四指线验证最佳：12cm 远起 + 全流程 + 漂移≤1.8cm。
 - **全碰撞版**：`grasp_v38_4finger_multicol.pt`（食/无/小 2/3 段碰撞开启后的微调版）。
 - **对照**：`grasp_v34b_4finger_drift_fix.pt`（近起、确定性提起最高 +14.2cm）。
 

@@ -210,9 +210,9 @@ class ActionsCfg:
         # [v33 四指模式] "middle"→"shared"：四通道同时驱动 食/中/无/小（共享）。
         #   回退："middle"。
         four_mode="shared",
-        # [v35 解冻 t2] 保持相对姿势阶段已稳(四指版 提14.2cm/漂移2cm) → 恢复通道自由
-        #   （若"拇指躲开/过弯"复发 → 回 (1,)）。
-        frozen_channels=(),
+        # [v42 从头跑配方] 冻结 t2：v41 从头(t2 自由)在 stage0 停滞 4 小时(gate 0.03)；
+        #   v29/v34 从头成功的共同配方都是 t2 冻结 → 恢复 (1,)。稳后由课程后期再解冻。
+        frozen_channels=(1,),
         # [2026-09-19 22:20 慢速压进·干预2] max_delta 0.5→0.3：每步目标角变化限幅收紧
         #   → 手指压向 cube 的速度更慢（天然柔化接触冲击、减少深穿透）。
         #   下限提醒（历史）：不要 <0.2（会截断探索、策略与输出脱节）。
@@ -354,8 +354,9 @@ class EventCfg:
     reset_arm_far = EventTerm(
         func=mdp.reset_arm_far,
         mode="reset",
-        # [v37c 课程放大] 0.7(8cm)已稳(lift11.6/succ3.8) → 1.0(≈11.6cm)。回退 0.7。
-        params={"scale": 1.0, "noise": 0.05},
+        # [v44 自动课程·从头跑] 初始 scale=0.0(近起=v34 从头成功配方)，课程 ladder 自动升到 1.0。
+        #   手动模式/固定档：改此值（并设 curriculum=None）。
+        params={"scale": 0.0, "noise": 0.03},
     )
     # [v19d 拇指 reset 课程] 50% episode 从"拇指已摆到可捏姿态"出发
     #   （用户实测 pose (-0.70,-1.24,0.79,0.70) 时拇 0.76N+中 0.37N 双接触）。
@@ -381,6 +382,13 @@ class EventCfg:
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("cube_obj"),
         },
+    )
+    # [v45 自动课程·易起] 接触预备位（学好的抓取策略接触前姿态）：让"闭拢→接触"从头可达。
+    #   课程 anneal_prepose 在 success EMA≥0.5 后把 pose_scale 退到 0 → 回到标定悬停+远起分布。
+    reset_arm_prepose = EventTerm(
+        func=mdp.reset_arm_prepose,
+        mode="reset",
+        params={"pose_scale": 1.0, "noise": 0.01},
     )
     # [2026-09-19 任务简化] cube 的 xy/旋转锁定已移至 spawn 阶段（LockedCuboidCfg）——
     #   实测 startup EventTerm 改 USD 属性不生效（PhysX 已解析），必须 spawn 时写属性。
@@ -848,7 +856,10 @@ class RewardsCfg:
         #   翻倍回报尺度崩了价值网络。温和版：仅 hold 1.5→2.0 + close 2.0→1.0。
         #   回退 2.0。
         weight=2.0,
-        params={"scale": 0.1},
+        # [v39 DexSuite 式] 每指阈值+计数（新增 thr/k/soft；scale 弃用）。
+        # [v44 从头跑] thr 0.03 起步（轻触即密集回报），课程 curriculum_param_anneal 渐到 0.15。
+        # [v46] 提门死区/软化在 rewards.GATE_LIFT 全局（课程函数渐变；params 有签名校验放不下）。
+        params={"thr": 0.03, "k": 1, "soft": 0.05},
     )
     # [v7 legacy 启用·力方向] 接触力沿 cube 局部 y 的占比（力度加权）：防"斜擦棱角/压顶"，
     #   把接触几何往"正向对夹"引导。无接触≈0、不与其它项打架。回退：weight=0。
@@ -937,9 +948,10 @@ class RewardsCfg:
     #   全程闭拢 10cm≈2.5 分；停住=0、远离=负，每步梯度大且可达。回退：weight=0。
     tip_progress: RewTerm = RewTerm(
         func=mdp.tip_progress_reward,
-        # [v37 奖励瘦身 A/B·用户要求] 12→0：验证"去掉逐帧进度"是否影响学习/最终指标，
-        #   并消除"cube 滑动→假进度"的投机源。回退：12（四指）/25（双指）。
-        weight=0.0,
+        # [v43 从头跑·脚手架] 0→12：v41/v42 从头(tip_progress=0)双双停滞(gate 0.017/0.016,
+        #   4h+/1.3k轮无接触)——v34 从头成功配方里它是 12（密集闭拢信号）。现作为初始脚手架，
+        #   由课程 anneal_tip_progress 在最终档后退火回 0（= 瘦身后的最终配置）。
+        weight=12.0,
         params={"metric": "box"},   # [v16] 与 surface 一致用盒面距离
     )
     # ---- 提起链（链尾，× 门控）----
@@ -952,6 +964,12 @@ class RewardsCfg:
         func=mdp.lift_success_reward,
         weight=5.0,
         params={"max_height": 0.08, "scale": 0.2},
+    )
+    # [v39 任务项] 提起期四指顺应（cube 离桌后奖励四指尖贴近/贴住）。回退：weight=0。
+    lift_conform: RewTerm = RewTerm(
+        func=mdp.lift_conform_reward,
+        weight=1.5,
+        params={"sigma": 0.05, "max_height": 0.08},
     )
     # [v7.11 用户要求] 手掌-cube 相对位姿漂移惩罚（位置/姿态各 -0.5 上限，带死区）：
     #   抓取/提起过程中手掌相对 cube 的位置与姿态保持不变（手指出力、手掌不乱挪）；
@@ -997,51 +1015,150 @@ class RewardsCfg:
     #   v30c 实测：能提+12.7cm 但拖 5.2cm → 加大。回退：motion -0.4 / drift 0。
     cube_motion: RewTerm = RewTerm(
         func=mdp.cube_motion_penalty,
-        weight=-0.8,
+        # [v44 从头跑] -0.8→0.0：初始不罚（v34 从头时无此罚），课程 anneal_cube_motion 渐回到 -0.8。
+        weight=0.0,
         params={"v_std": 0.05, "w_std": 1.0},
     )
     cube_drift: RewTerm = RewTerm(
         func=mdp.cube_drift_penalty,
-        # [v34b] -0.8→-1.5：配合漂移终止，把"推走"彻底变负收益。
-        weight=-1.5,
+        # [v44 从头跑] -1.5→0.0：初始不罚，课程 anneal_cube_drift 渐回到 -1.5（配合漂移终止）。
+        weight=0.0,
         params={"d_std": 0.02},
     )
 
 
 @configclass
 class CurriculumCfg:
-    """课程学习（参考 SoftHand）：单次训练逐步激活抓取奖励，全程无 resume。
+    """[v40 自动课程·用户要求] 把"人工课程"写进代码，一次从头跑到尾（手动模式：curriculum=None）。
 
-    ⚠️ [2026-09-14] 已停用（env_cfg.curriculum=None），且下面引用的 term 名均为旧版本
-    （fingertip / tcp_gated_hand / lifted / contact_force 已不存在）——启用前必须先更新 term 名。
-
-    阶段 1（0 ~ 30000 步 ≈ 100 episodes）: 手指奖励=0，策略先学接近（等同 Stage 1）
-    阶段 2（30000 步后）: 激活手指弯曲/指尖接近/握紧奖励，学抓取
-    阶段 3（60000 步后）: 激活指尖接触/抬起奖励，巩固抓握
+    A. 远起自动阶梯：ladder 0.0→0.15→0.3→0.5→0.7→1.0；升档 = lift_success EMA≥0.45
+       且本档≥5000 步 且 连续 3 次判定通过；只升不降；续训自动对齐当前 scale（不回退）。
+    B. 难度渐入（v44，立即触发，6000 步）：cube_motion 0→-0.8、cube_drift 0→-1.5、
+       contact_gate.thr 0.03→0.15（先松后严——从头跑早期"不怕碰"，v34 配方）。
+    C. 辅助退火（串行）：thumb_face_reach 3.0→0 → t2 解冻 → tip_progress 12→0 → tcp_reach 1.5→0.5。
     """
 
-    # ===== 阶段 2：手指抓取（30000 步后开启）=====
-    enable_finger_close = CurrTerm(
-        func=mdp.modify_reward_weight,
-        params={"term_name": "finger_close", "weight": 2.0, "num_steps": 30000},
+    arm_far = CurrTerm(
+        func=mdp.curriculum_arm_far,
+        params={
+            "ladder": (0.0, 0.15, 0.3, 0.5, 0.7, 1.0),
+            "threshold": 0.45,
+            "min_steps_per_stage": 5000,
+            "check_every": 240,
+            "require_k": 3,
+        },
     )
-    enable_fingertip = CurrTerm(
-        func=mdp.modify_reward_weight,
-        params={"term_name": "fingertip", "weight": 2.0, "num_steps": 30000},
+    anneal_prepose = CurrTerm(
+        func=mdp.curriculum_param_anneal,
+        params={
+            "term_name": "reset_arm_prepose",
+            "target": "event",
+            "key": "pose_scale",
+            "target_value": 0.0,
+            "threshold": 0.5,
+            "num_steps": 4000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 0.0,
+        },
     )
-    enable_tcp_gated_hand = CurrTerm(
-        func=mdp.modify_reward_weight,
-        params={"term_name": "tcp_gated_hand", "weight": 2.0, "num_steps": 30000},
+    anneal_gate_thr = CurrTerm(
+        func=mdp.curriculum_param_anneal,
+        params={
+            "term_name": "contact_gate",
+            "key": "thr",
+            "target_value": 0.15,
+            "threshold": 0.5,
+            "num_steps": 6000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 0.0,
+        },
     )
-
-    # ===== 阶段 3：接触与抬起（60000 步后开启）=====
-    enable_contact_force = CurrTerm(
-        func=mdp.modify_reward_weight,
-        params={"term_name": "contact_force", "weight": 1.0, "num_steps": 60000},
+    anneal_hand_preclose = CurrTerm(
+        func=mdp.curriculum_hand_preclose_anneal,
+        params={
+            "threshold": 0.5,
+            "num_steps": 6000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 0.0,
+        },
     )
-    enable_lifted = CurrTerm(
-        func=mdp.modify_reward_weight,
-        params={"term_name": "lifted", "weight": 2.0, "num_steps": 60000},
+    anneal_gate_lift = CurrTerm(
+        func=mdp.curriculum_gate_lift_anneal,
+        params={
+            "target_deadzone": 0.35,
+            "target_scale": 0.2,
+            "threshold": 0.5,
+            "num_steps": 6000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 0.0,
+        },
+    )
+    anneal_cube_motion = CurrTerm(
+        func=mdp.curriculum_reward_anneal,
+        params={
+            "term_name": "cube_motion",
+            "target_weight": -0.8,
+            "threshold": 0.5,
+            "num_steps": 6000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 0.0,
+        },
+    )
+    anneal_cube_drift = CurrTerm(
+        func=mdp.curriculum_reward_anneal,
+        params={
+            "term_name": "cube_drift",
+            "target_weight": -1.5,
+            "threshold": 0.5,
+            "num_steps": 6000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 0.0,
+        },
+    )
+    unfreeze_t2 = CurrTerm(
+        func=mdp.curriculum_unfreeze,
+        params={
+            "threshold": 0.6,
+            "num_steps": 20000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 1.0,
+            "pause_below": 0.35,
+        },
+    )
+    anneal_tip_progress = CurrTerm(
+        func=mdp.curriculum_reward_anneal,
+        params={
+            "term_name": "tip_progress",
+            "target_weight": 0.0,
+            "threshold": 0.5,
+            "num_steps": 12000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 1.0,
+            "after_term": "t2_unfreeze",
+            "pause_below": 0.35,
+        },
+    )
+    anneal_tcp_reach = CurrTerm(
+        func=mdp.curriculum_reward_anneal,
+        params={
+            "term_name": "tcp_reach",
+            "target_weight": 0.5,
+            "threshold": 0.5,
+            "num_steps": 12000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 1.0,
+            "after_term": "tip_progress",
+            "pause_below": 0.35,
+        },
     )
 
 
@@ -1124,8 +1241,8 @@ class Ur5eDrillgraspEnvCfg(ManagerBasedRLEnvCfg):
     # MDP settings
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
-    # curriculum: CurriculumCfg = CurriculumCfg()
-    curriculum = None  # 【观测模式】课程学习关闭：抓取/抬升奖励保持 weight=0，纯 Stage 1（reach）
+    # [v40 自动课程·用户要求] 开启（远起阶梯 + 辅助退火）；手动模式改回 None。
+    curriculum: CurriculumCfg = CurriculumCfg()
 
 
     # Post initialization
