@@ -53,12 +53,14 @@ DRILL_UR5E_CFG = ArticulationCfg(
             #   降低 S1 起步阶段冻结概率（40cm 版曾冻在 21cm；起点直接设在 20cm，成功区更近）。
             #   角度来自用户 IsaacSim GUI 实测 [90,-100,-120,-145,-90,180]°（手掌朝下）→ 弧度：
             #   ⚠️ σ 地板/train.py 补丁仍建议后续补上——缩距治概率，地板治机制。
-            "shoulder_pan_joint":1.5708,     # 90°
-            "shoulder_lift_joint":-2.0944,   # -120°
-            "elbow_joint":-2.2689,           # -130°
-            "wrist_1_joint":-1.9199,         # -110°
-            "wrist_2_joint":-1.5708,         # -90°
-            "wrist_3_joint":3.1416,          # 180°，手掌朝下
+            # [v49 从上往下·用户预览确认] 新标定悬停位 = cube 正上方 +9cm（腕朝向不变）。
+            #   解出方式: OSC 纯位置闭环(保持姿态) 到 cube+(0,0,9cm)，精度 0.1mm。
+            "shoulder_pan_joint":1.6046,
+            "shoulder_lift_joint":-1.8669,
+            "elbow_joint":-2.2317,
+            "wrist_1_joint":-2.1693,
+            "wrist_2_joint":-1.5435,
+            "wrist_3_joint":3.0947,
 
             # # 拇指初始位置：[用户 2026-09-01] thumb1 -30°→-10°：play 发现 -30° 时拇指朝下戳 cube，
             # #   悬停时拇指尖侵入 cube 顶面空间 → cube 被扰动 → success"稳定"条件不满足、

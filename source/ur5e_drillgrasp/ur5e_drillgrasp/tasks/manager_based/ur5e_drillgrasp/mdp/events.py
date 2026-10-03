@@ -107,24 +107,28 @@ def reset_arm_far(
     env: ManagerBasedEnv,
     env_ids,
     scale: float = 0.4,
-    noise: float = 0.05,
-    joint_names: tuple = ("shoulder_lift_joint", "elbow_joint"),
+    noise: float = 0.03,
+    offsets: tuple = (
+        ("shoulder_pan_joint", 0.0148), ("shoulder_lift_joint", 0.2260), ("elbow_joint", 0.1196),
+        ("wrist_1_joint", -0.3612), ("wrist_2_joint", 0.0182), ("wrist_3_joint", -0.0564),
+    ),
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> None:
-    """[v28 接近阶段] 手臂远起：肩抬 +0.25*scale、肘 −0.25*scale（实测 scale=1 时 TCP
-    距 cube ~11.6cm 且高于 cube 安全；OSC 目标仍为标定悬停位 → 会自然拉回=天然接近）。
+    """[v49 从上往下] 远起=**垂直上抬**：scale=1 时 TCP 抬到 cube 正上方 ~20cm（xy 不变）。
 
-    课程：scale 0.2(≈2cm) → 0.4 → 0.7 → 1.0(≈11.6cm) → 1.3(≈15cm)，达标逐档放大。
+    偏移由 OSC 闭环解出（0.1mm 精度，姿态保持）；OSC 为相对目标 → 静止时保持该姿态，
+    由策略主动落下（"在高处下落"）。旧版水平后退回退：offsets=(("shoulder_lift_joint",0.25),
+    ("elbow_joint",-0.25))。
     """
     asset: Articulation = env.scene[asset_cfg.name]
-    ids = [asset.joint_names.index(n) for n in joint_names]
     pos = asset.data.joint_pos[env_ids].clone()
     n = len(env_ids)
     dev = pos.device
-    if len(ids) >= 1:
-        pos[:, ids[0]] += 0.25 * scale + (torch.rand(n, device=dev) * 2 - 1) * noise
-    if len(ids) >= 2:
-        pos[:, ids[1]] += -0.25 * scale + (torch.rand(n, device=dev) * 2 - 1) * noise
+    for name, delta in offsets:
+        if name not in asset.joint_names:
+            continue
+        i = asset.joint_names.index(name)
+        pos[:, i] += scale * float(delta) + (torch.rand(n, device=dev) * 2 - 1) * noise
     vel = asset.data.joint_vel[env_ids].clone()
     asset.write_joint_state_to_sim(pos, vel, env_ids=env_ids)
 
@@ -134,10 +138,13 @@ def reset_arm_prepose(
     env_ids,
     pose_scale: float = 1.0,
     noise: float = 0.01,
+    # [v49 从上往下] 组合偏移 =（旧悬停−新悬停=高度回补）+（旧腕预备位）——
+    #   使易起期起点仍等价于旧版"低悬停+腕预备位"（已验证可学），课程后期 pose_scale→0 时
+    #   起点变为新悬停(+9cm)，策略自行学会从高处下落。
     offsets: tuple = (
-        ("shoulder_pan_joint", -0.058), ("shoulder_lift_joint", 0.05), ("elbow_joint", 0.093),
-        ("wrist_1_joint", -0.279), ("wrist_2_joint", -0.198), ("wrist_3_joint", -0.012),
-    ),  # [v46] 手部预闭合改由 curriculum_hand_preclose_anneal 改 default_joint_pos 承担（持久）
+        ("shoulder_pan_joint", -0.0918), ("shoulder_lift_joint", -0.1775), ("elbow_joint", 0.0558),
+        ("wrist_1_joint", -0.0296), ("wrist_2_joint", -0.2253), ("wrist_3_joint", 0.0349),
+    ),
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> None:
     """[v45 易起课程] 接触预备位：把臂+手推到"学好的抓取策略接触前一瞬的姿态"附近。

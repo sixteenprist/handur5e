@@ -349,8 +349,8 @@ class EventCfg:
             "noise": 0.005,
         },
     )
-    # [v28 接近阶段] 手臂远起（肩抬/肘收，OSC 自然拉回）。课程：scale 0.4→0.7→1.0→1.3。
-    #   回退：scale=0（等于标定悬停起）。
+    # [v49 从上往下] 手臂远起=垂直上抬（scale=1 → cube 正上方 ~20cm；xy 不变）——用户确认的
+    #   "高处下落"起点。回退（旧水平后退）：见 mdp/events.py::reset_arm_far 注释。
     reset_arm_far = EventTerm(
         func=mdp.reset_arm_far,
         mode="reset",
@@ -1060,6 +1060,7 @@ class CurriculumCfg:
             "check_every": 240,
             "require_k": 3,
             "gate_min_scale": 0.0,
+            "pause_below": 0.35,
         },
     )
     anneal_gate_thr = CurrTerm(
@@ -1083,6 +1084,7 @@ class CurriculumCfg:
             "check_every": 240,
             "require_k": 3,
             "gate_min_scale": 0.0,
+            "pause_below": 0.35,
         },
     )
     anneal_gate_lift = CurrTerm(
@@ -1210,6 +1212,28 @@ class TerminationsCfg:
 ##
 # Environment configuration
 ##
+
+
+def apply_final_deploy_overrides(cfg) -> None:
+    """[交付·自动课程末态] 覆盖为"最终部署配置"（play/评测/真机自查用）。
+
+    cfg 文件里存的是"从头跑起始易值"（预备位/预闭合、松门控、tip12…），直接拿来
+    推理会分布错配（实测成功率骤降）。此函数一键切到课程末态：
+      curriculum 关闭 + 远起 1.0 + 预备位/预闭合 0 + 门控链终值 + t2 自由。
+    """
+    cfg.curriculum = None
+    cfg.events.reset_arm_prepose.params["pose_scale"] = 0.0
+    cfg.events.reset_arm_far.params["scale"] = 1.0
+    cfg.actions.hand_action.frozen_channels = ()
+    cfg.actions.hand_action.thaw = 1.0
+    from .mdp.rewards import GATE_LIFT
+
+    GATE_LIFT["deadzone"], GATE_LIFT["scale"] = 0.35, 0.2
+    cfg.rewards.contact_gate.params["thr"] = 0.15
+    cfg.rewards.tip_progress.weight = 0.0
+    cfg.rewards.tcp_reach.weight = 0.5
+    cfg.rewards.cube_motion.weight = -0.8
+    cfg.rewards.cube_drift.weight = -1.5
 
 
 @configclass

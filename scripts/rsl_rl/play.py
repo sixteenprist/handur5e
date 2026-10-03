@@ -34,6 +34,12 @@ parser.add_argument(
     help="Use the pre-trained checkpoint from Nucleus.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument(
+    "--final",
+    action="store_true",
+    default=False,
+    help="[交付] 用自动课程末态=最终部署配置（关课程/远起1.0/门控终值/t2自由）。",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -114,6 +120,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # note: certain randomizations occur in the environment initialization so we set the seed here
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+
+    if getattr(args_cli, "final", False):
+        import importlib
+
+        _m = importlib.import_module(
+            "ur5e_drillgrasp.tasks.manager_based.ur5e_drillgrasp.ur5e_drillgrasp_env_cfg"
+        )
+        _m.apply_final_deploy_overrides(env_cfg)
+        print("[INFO] --final: 已应用末态/最终部署配置覆盖")
 
     # specify directory for logging experiments
     # 锚定到项目根目录（scripts/rsl_rl/../../），与 train.py 一致

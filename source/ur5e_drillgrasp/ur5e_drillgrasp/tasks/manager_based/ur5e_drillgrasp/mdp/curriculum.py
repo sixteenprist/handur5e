@@ -181,6 +181,7 @@ def curriculum_param_anneal(
     require_k: int = 3,
     gate_min_scale: float | None = None,
     after_term: str | None = None,
+    pause_below: float | None = None,
     ema_alpha: float = 0.001,
     **kwargs,
 ) -> float:
@@ -216,6 +217,10 @@ def curriculum_param_anneal(
         if getattr(env, astate + "_started", False) and not done:
             v0 = float(getattr(env, astate + "_v0"))
             t0 = int(getattr(env, astate + "_t0"))
+            if pause_below is not None and ema < float(pause_below):
+                shift = int(env._cur_cnt) - t0 - int(getattr(env, astate + "_held", 0))
+                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + shift)
+            t0 = t0 + int(getattr(env, astate + "_held", 0))
             frac = min(1.0, max(0.0, (int(env._cur_cnt) - t0) / float(max(1, num_steps))))
             term.params[key] = v0 + (target_value - v0) * frac
             if frac >= 1.0:
@@ -349,6 +354,7 @@ def curriculum_hand_preclose_anneal(
     require_k: int = 3,
     gate_min_scale: float | None = None,
     after_term: str | None = None,
+    pause_below: float | None = None,
     ema_alpha: float = 0.001,
     **kwargs,
 ) -> float:
@@ -394,6 +400,10 @@ def curriculum_hand_preclose_anneal(
             orig = getattr(env, astate + "_orig")
             ids = getattr(env, astate + "_ids")
             t0 = int(getattr(env, astate + "_t0"))
+            if pause_below is not None and ema < float(pause_below):
+                shift = int(env._cur_cnt) - t0 - int(getattr(env, astate + "_held", 0))
+                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + shift)
+            t0 = t0 + int(getattr(env, astate + "_held", 0))
             frac = min(1.0, max(0.0, (int(env._cur_cnt) - t0) / float(max(1, num_steps))))
             d = robot.data.default_joint_pos
             offs = getattr(env, astate + "_offs")
