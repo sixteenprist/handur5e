@@ -209,7 +209,9 @@ class ActionsCfg:
         scale=1.0,
         # [v33 四指模式] "middle"→"shared"：四通道同时驱动 食/中/无/小（共享）。
         #   回退："middle"。
-        four_mode="shared",
+        # [v50] 12维中间档：四指各自 j2/j3 独立（动作总维 = 臂6 + 手12 = 18）；
+        #   回退到 8 维共享：改回 "shared"。
+        four_mode="independent_j23",
         # [v42 从头跑配方] 冻结 t2：v41 从头(t2 自由)在 stage0 停滞 4 小时(gate 0.03)；
         #   v29/v34 从头成功的共同配方都是 t2 冻结 → 恢复 (1,)。稳后由课程后期再解冻。
         frozen_channels=(1,),
@@ -676,6 +678,32 @@ class CurriculumCfg:
             "pause_below": 0.35,
         },
     )
+    anneal_indep_mix = CurrTerm(
+        func=mdp.curriculum_indep_mix_anneal,
+        params={
+            "target_alpha": 1.0,
+            "threshold": 0.5,
+            "num_steps": 16000,   # [v52b] 12k→16k：独立化更慢，防"解锁过快→捏合散架"
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 0.0,
+            "pause_below": 0.35,
+        },
+    )
+    anneal_flex_mix = CurrTerm(
+        func=mdp.curriculum_flex_mix_anneal,
+        params={
+            "target_min_w": 0.5,
+            # [v52b] 与 α 串行（α 完成后再压 min）且放慢：12k→12k，防"双退火叠加崩"
+            "after_term": "indep_mix",
+            "threshold": 0.5,
+            "num_steps": 12000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 0.0,
+            "pause_below": 0.35,
+        },
+    )
     anneal_gate_lift = CurrTerm(
         func=mdp.curriculum_gate_lift_anneal,
         params={
@@ -815,9 +843,15 @@ def apply_final_deploy_overrides(cfg) -> None:
     cfg.events.reset_arm_far.params["scale"] = 1.0
     cfg.actions.hand_action.frozen_channels = ()
     cfg.actions.hand_action.thaw = 1.0
-    from .mdp.rewards import GATE_LIFT
+    from .mdp.actions import INDEP_MIX
+    from .mdp.rewards import FLEX_MIX, GATE_LIFT
 
     GATE_LIFT["deadzone"], GATE_LIFT["scale"] = 0.35, 0.2
+    # [v52] 12维课程末态：独立性 α=1（各指独立）；四指弯曲聚合 min 权重 0.5。
+    #   注意：这两项是模块级全局（课程在训练进程内渐变）——推理/play/评测进程必须同样置到末值，
+    #   否则与训练分布错配（实测 α=0 时 12 维策略 0% 成功）。
+    INDEP_MIX["alpha"] = 1.0
+    FLEX_MIX["min_w"] = 0.5
     cfg.rewards.contact_gate.params["thr"] = 0.15
     cfg.rewards.tip_progress.weight = 0.0
     cfg.rewards.tcp_reach.weight = 0.5

@@ -9,7 +9,8 @@
   [v7.10 用户要求] 默认由"四指共享4"改为"仅中指4"：任务约定只有拇指+中指参与
   （其余三指资产里无碰撞），共享通道会让食/无/小跟随摆动纯属视觉噪音 → 现在
   index/ring/little 的目标恒为初始位姿（full_action=0），只有中指逐节卷曲。
-  动作维度仍是 8（拇指4+中指4）、观测维度不变 → 旧 ckpt 兼容（行为等价，三指静止）。
+  four_mode="middle" 时动作维度 8（拇指4+中指4），观测维度不变 → 旧 ckpt 兼容（行为等价，三指静止）。
+  [v50] 另支持 "shared"（拇指4+四指共享4=8）与 "independent_j23"（拇指4+四指各自 j2/j3=12）。
 层级弯曲是"跨关节"：中指 4 关节仍有 4 个独立通道，四通道值可不同 → 逐节卷曲包络
 （v18 教训：掌根弯、中段不弯 → 指尖够不到 → 挤飞；切勿把 4 通道再压成 1 个）。
 """
@@ -28,8 +29,13 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
 
 
+# [v50 课程化] 四指独立性 α（1=各指独立；0=四指按关节组均值同步=共享行为）。
+#   12 维早期探索太难 → α 从 0 起步（等价 8 维共享，快速学会捏合），学会后课程渐开到 1。
+INDEP_MIX = {"alpha": 0.0}
+
+
 class GroupedHandAction(ActionTerm):
-    """手指分组动作：拇指独立 4 通道，四指（食/中/无/小）跨指共享 4 通道。"""
+    """手指分组动作：拇指独立 4 通道；四指支持共享 4 通道（8维）或各自 j2/j3 独立（12维）。"""
     cfg: "GroupedHandActionCfg"
 
     def __init__(self, cfg, env: ManagerBasedEnv):
@@ -50,7 +56,16 @@ class GroupedHandAction(ActionTerm):
         self._n_thumb = len(self._thumb_ids)
         self._n_per_finger = 4  # 每指4关节
 
-        self._action_dim = self._n_thumb + 4   # 拇指4(独立) + 四指共享4
+        # [v50 12维] 动作维度按模式决定：shared/middle=拇指4+共享4；independent_j23=拇指4+四指各自j2/j3=8
+        if cfg.four_mode == "independent_j23":
+            self._finger_j23 = []
+            for f in ("index", "middle", "ring", "little"):
+                i2, _ = self._asset.find_joints(f"{f}2_joint")
+                i3, _ = self._asset.find_joints(f"{f}3_joint")
+                self._finger_j23.append((int(i2[0]), int(i3[0])))
+            self._action_dim = self._n_thumb + 8
+        else:
+            self._action_dim = self._n_thumb + 4   # 拇指4(独立) + 四指共享4
         self._raw_actions = torch.zeros(env.num_envs, self._action_dim, device=env.device)
         self._processed_actions = torch.zeros(env.num_envs, self._action_dim, device=env.device)
 
@@ -63,16 +78,22 @@ class GroupedHandAction(ActionTerm):
         # [2026-09-22 可扩展·单一开关] 四指通道的落点由 cfg.four_mode 决定：
         #   "middle"（默认，现状）：只写中指；其余三指目标恒为初值（静止）
         #   "shared"（历史/四指实验）：同一通道值写入 食/中/无/小 四指对应关节
-        #   （若将来要"四指独立"，需扩动作维度=每指 4 通道，属于改观测/动作维度的重训项）
-        if cfg.four_mode not in ("middle", "shared"):
-            raise ValueError(f"four_mode 只支持 'middle'/'shared'，收到 {cfg.four_mode!r}")
+        #   "independent_j23"（[v50] 12维中间档）：食/中/无/小 各自 j2/j3 独立；
+        #       j1/j4 目标恒为预设（实机 j4 与 j3 耦合、用户定按 0° 处理）
+        if cfg.four_mode not in ("middle", "shared", "independent_j23"):
+            raise ValueError(
+                f"four_mode 只支持 'middle'/'shared'/'independent_j23'，收到 {cfg.four_mode!r}"
+            )
         self._four_map = []
-        for i in range(self._n_per_finger):
-            group = []
-            for ids in (self._index_ids, self._middle_ids, self._ring_ids, self._little_ids):
-                if i < len(ids):
-                    group.append(ids[i])
-            self._four_map.append(group)
+        if cfg.four_mode != "independent_j23":
+            for i in range(self._n_per_finger):
+                group = []
+                for ids in (self._index_ids, self._middle_ids, self._ring_ids, self._little_ids):
+                    if i < len(ids):
+                        group.append(ids[i])
+                self._four_map.append(group)
+        else:
+            print(f"[GroupedHandAction] 12维模式 j2/j3 映射: {self._finger_j23}", flush=True)
 
     @property
     def action_dim(self) -> int:
@@ -111,7 +132,9 @@ class GroupedHandAction(ActionTerm):
             self._raw_actions[:, frozen] = self._raw_actions[:, frozen] * thaw
 
         thumb_act = actions[:, :self._n_thumb]
-        four_act = actions[:, self._n_thumb:self._n_thumb + 4]
+        # [v50] 四指通道数随模式：shared/middle=4；independent_j23=8（每指 j2/j3）
+        n_four = 8 if self.cfg.four_mode == "independent_j23" else 4
+        four_act = actions[:, self._n_thumb:self._n_thumb + n_four]
 
         full_action = torch.zeros(
             (actions.shape[0], self._asset.num_joints), device=actions.device, dtype=actions.dtype
@@ -128,6 +151,21 @@ class GroupedHandAction(ActionTerm):
             if len(self._middle_ids) > 0:
                 n_m = min(4, len(self._middle_ids))
                 full_action[:, self._middle_ids[:n_m]] = four_act[:, :n_m]
+        elif self.cfg.four_mode == "independent_j23":
+            # [v50 12维] 通道 2k/2k+1 → 第 k 指的 j2/j3；j1/j4 不写（保持预设）。
+            # 独立性课程 α=INDEP_MIX["alpha"]：a_i ← α·a_i + (1−α)·a_shared
+            #   a_shared 取"食指通道"（不用四指均值：均值会把 4 路噪声平均成 σ/2，
+            #   实测早期探索被腰斩、捏合学不出来）。
+            alpha = float(INDEP_MIX.get("alpha", 1.0))
+            if alpha < 1.0:
+                a2 = four_act[:, 0::2]                     # (N,4) 各指 j2
+                a3 = four_act[:, 1::2]                     # (N,4) 各指 j3
+                a2 = alpha * a2 + (1.0 - alpha) * four_act[:, 0:1]
+                a3 = alpha * a3 + (1.0 - alpha) * four_act[:, 1:2]
+                four_act = torch.stack([a2, a3], dim=2).reshape(four_act.shape[0], 8)
+            for k, (i2, i3) in enumerate(self._finger_j23):
+                full_action[:, i2] = four_act[:, 2 * k]
+                full_action[:, i3] = four_act[:, 2 * k + 1]
         else:  # "shared"：历史四指共享（食/中/无/小 同一通道值）
             for i, joint_ids in enumerate(self._four_map):
                 if len(joint_ids) > 0:
@@ -173,7 +211,8 @@ class GroupedHandActionCfg(ActionTermCfg):
     class_type: type[ActionTerm] = GroupedHandAction
     asset_name: str = "robot"
     # [2026-09-22 可扩展·单一开关] 四指通道的落点：
-    #   "middle" = 仅中指（当前任务/默认，其余三指静止）；"shared" = 四指共享（历史行为/四指实验）
+    #   "middle" = 仅中指；"shared" = 四指共享（8维，v49 现状）；
+    #   "independent_j23" = 四指各自 j2/j3 独立（12维，v50 中间档；j1/j4 恒预设）
     four_mode: str = "middle"
     # [2026-09-15 对齐·防呆] 原默认值 0.05，但 env_cfg 一直显式传入 1.0（实际生效值 = 1.0；
     #   0.05 从未生效，曾被误读为"手指动程仅 ±3°"的警报源）。改为与实例值一致，防再次误读。
@@ -187,7 +226,7 @@ class GroupedHandActionCfg(ActionTermCfg):
     #   调节方向：S2 接触冲击大（弹开 cube）→ 收紧 0.3；手部响应迟钝/截断过频 → 放宽 0.7。
     #   ⚠️ 不要 <0.2：限幅过紧会截断探索动作 → 策略行为与输出脱节、std 膨胀（v70 教训的另一面）。
     max_delta: float = 0.5
-    # [v21] 冻结的手部通道下标（0-7：拇指1-4=0-3，四指=4-7）；空=不冻结。
+    # [v21] 冻结的手部通道下标（拇指1-4=0-3；四指 shared=4-7 / independent_j23=4-11）；空=不冻结。
     frozen_channels: tuple = ()
     # [v47 软解冻] 冻结通道的放行系数：0=全冻（默认原行为）；课程 0→1 渐变放开。
     thaw: float = 0.0

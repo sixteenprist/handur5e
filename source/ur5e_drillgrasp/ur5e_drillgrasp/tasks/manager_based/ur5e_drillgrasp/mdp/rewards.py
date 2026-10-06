@@ -209,7 +209,12 @@ def _finger_flex(robot: Articulation) -> torch.Tensor:
     # [2026-09-14 四指共享适配] 跨指 0.7×min + 0.3×mean（5 指）→"拇指组 vs 四指组"两组：
     #   四指同通路驱动应视为整体（组内 mean 吸收负载差异）；组间 min 保持"拇指也要弯"约束。
     _fi = list(ACTIVE_FOUR_INDICES)
-    thumb, four = per[0], per[_fi].mean(dim=0)               # 各 (N,)（四指组=ACTIVE_FOUR_INDICES）
+    # [v50 12维·独立手指] 四指组内聚合 min/mean 混合；min 权重 FLEX_MIX 可课程化：
+    #   早期=0（纯 mean，闭合梯度不被"最差指"稀释，12 维探索更顺）→ 学会后渐到 0.5
+    #   （逼四指都参与收拢，服务"顺应收拢"）。共享模式下四指同步，此混合无差别。
+    _w = float(FLEX_MIX["min_w"])
+    four = _w * per[_fi].min(dim=0).values + (1.0 - _w) * per[_fi].mean(dim=0)   # (N,)
+    thumb = per[0]
     return 0.7 * torch.minimum(thumb, four) + 0.3 * (0.5 * thumb + 0.5 * four)
 
 
@@ -623,6 +628,9 @@ def _contact_alignment(env: ManagerBasedRLEnv, force_thresh: float = 0.03) -> to
 
 # [v46 课程化] 提起门控参数（全局，课程函数直接渐变；reward term 的 params 有签名校验放不下）
 GATE_LIFT = {"deadzone": 0.10, "scale": 0.15}
+
+# [v50 课程化] 四指弯曲聚合的 min 权重（0=纯平均，0.5=半数看最差指；课程学会后渐入）
+FLEX_MIX = {"min_w": 0.0}
 
 
 def _gate_lift_params(env: ManagerBasedRLEnv) -> tuple[float, float]:

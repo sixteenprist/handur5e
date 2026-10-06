@@ -413,3 +413,107 @@ def curriculum_hand_preclose_anneal(
                 setattr(env, astate + "_done", True)
                 print("[curriculum] 手部预闭合退回完成（默认位=原始预设）", flush=True)
     return 0.0
+
+
+def curriculum_flex_mix_anneal(
+    env: "ManagerBasedRLEnv",
+    env_ids=None,
+    target_min_w: float = 0.5,
+    threshold: float = 0.5,
+    num_steps: int = 6000,
+    check_every: int = 240,
+    require_k: int = 3,
+    gate_min_scale: float | None = None,
+    after_term: str | None = None,
+    pause_below: float | None = None,
+    ema_alpha: float = 0.001,
+    **kwargs,
+) -> float:
+    """[v50 自动课程 G] 四指弯曲聚合的 min 权重 FLEX_MIX 从 0 渐到 target（学会抓取后）。
+
+    目的：12 维独立手指下，早期用纯 mean 保持闭合梯度（探索顺）；抓稳后引入 min 项，
+    逼四指都参与收拢（顺应收拢）。带"退化即暂停"。
+    """
+    from . import rewards as _rw
+
+    ema = _signal_ema(env, ema_alpha)
+    astate = "_cur_anneal_flex_mix"
+    done = getattr(env, astate + "_done", False)
+    if not done:
+        if _tick(env, check_every) and not getattr(env, astate + "_started", False):
+            far = float(_get_event_cfg(env, "reset_arm_far").params.get("scale", 0.0))
+            after_ok = True if after_term is None else bool(getattr(env, f"_cur_anneal_{after_term}_done", False))
+            cond = ema >= threshold and (gate_min_scale is None or far >= gate_min_scale - 1e-6) and after_ok
+            ok_cnt = int(getattr(env, astate + "_ok", 0))
+            ok_cnt = ok_cnt + 1 if cond else 0
+            setattr(env, astate + "_ok", ok_cnt)
+            if cond and ok_cnt >= require_k:
+                setattr(env, astate + "_started", True)
+                setattr(env, astate + "_v0", float(_rw.FLEX_MIX["min_w"]))
+                setattr(env, astate + "_t0", int(env._cur_cnt))
+                setattr(env, astate + "_held", 0)
+                print(f"[curriculum] FLEX_MIX 渐入触发: {_rw.FLEX_MIX['min_w']:.2f} → {target_min_w}", flush=True)
+        if getattr(env, astate + "_started", False) and not done:
+            v0 = float(getattr(env, astate + "_v0"))
+            t0 = int(getattr(env, astate + "_t0"))
+            if pause_below is not None and ema < float(pause_below):
+                shift = int(env._cur_cnt) - t0 - int(getattr(env, astate + "_held", 0))
+                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + shift)
+            t0 = t0 + int(getattr(env, astate + "_held", 0))
+            frac = min(1.0, max(0.0, (int(env._cur_cnt) - t0) / float(max(1, num_steps))))
+            _rw.FLEX_MIX["min_w"] = v0 + (target_min_w - v0) * frac
+            if frac >= 1.0:
+                setattr(env, astate + "_done", True)
+                print(f"[curriculum] FLEX_MIX 渐入完成: min_w={target_min_w}", flush=True)
+    return float(_rw.FLEX_MIX["min_w"])
+
+
+def curriculum_indep_mix_anneal(
+    env: "ManagerBasedRLEnv",
+    env_ids=None,
+    target_alpha: float = 1.0,
+    threshold: float = 0.5,
+    num_steps: int = 12000,
+    check_every: int = 240,
+    require_k: int = 3,
+    gate_min_scale: float | None = None,
+    after_term: str | None = None,
+    pause_below: float | None = None,
+    ema_alpha: float = 0.001,
+    **kwargs,
+) -> float:
+    """[v50 自动课程 H] 四指独立性 α 从 0（共享）渐开到 target（各指独立）。
+
+    动机：12 维"每指独立"直接从头探索太慢（实测 1400+ 轮未起爆）→ 早期用共享等价行为
+    快速学会捏合，抓稳后把 α 渐开到 1，平滑解锁独立控制。带"退化即暂停"。
+    """
+    from .actions import INDEP_MIX
+
+    ema = _signal_ema(env, ema_alpha)
+    astate = "_cur_anneal_indep_mix"
+    done = getattr(env, astate + "_done", False)
+    if not done:
+        if _tick(env, check_every) and not getattr(env, astate + "_started", False):
+            far = float(_get_event_cfg(env, "reset_arm_far").params.get("scale", 0.0))
+            after_ok = True if after_term is None else bool(getattr(env, f"_cur_anneal_{after_term}_done", False))
+            cond = ema >= threshold and (gate_min_scale is None or far >= gate_min_scale - 1e-6) and after_ok
+            ok_cnt = int(getattr(env, astate + "_ok", 0))
+            ok_cnt = ok_cnt + 1 if cond else 0
+            setattr(env, astate + "_ok", ok_cnt)
+            if cond and ok_cnt >= require_k:
+                setattr(env, astate + "_started", True)
+                setattr(env, astate + "_t0", int(env._cur_cnt))
+                setattr(env, astate + "_held", 0)
+                print(f"[curriculum] 独立性 α 渐开: 0→{target_alpha}（{num_steps} 次调用）", flush=True)
+        if getattr(env, astate + "_started", False) and not done:
+            t0 = int(getattr(env, astate + "_t0"))
+            if pause_below is not None and ema < float(pause_below):
+                shift = int(env._cur_cnt) - t0 - int(getattr(env, astate + "_held", 0))
+                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + shift)
+            t0 = t0 + int(getattr(env, astate + "_held", 0))
+            frac = min(1.0, max(0.0, (int(env._cur_cnt) - t0) / float(max(1, num_steps))))
+            INDEP_MIX["alpha"] = frac * target_alpha
+            if frac >= 1.0:
+                setattr(env, astate + "_done", True)
+                print(f"[curriculum] 独立性 α 渐开完成: α={target_alpha}", flush=True)
+    return float(INDEP_MIX["alpha"])
