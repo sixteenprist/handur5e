@@ -632,6 +632,92 @@ GATE_LIFT = {"deadzone": 0.10, "scale": 0.15}
 # [v50 课程化] 四指弯曲聚合的 min 权重（0=纯平均，0.5=半数看最差指；课程学会后渐入）
 FLEX_MIX = {"min_w": 0.0}
 
+# [S4 四指贴近门] 提起前/提起时要求四指尖"贴近"cube 面（基于盒面距离，不要求接触力）。
+#   n=0 关闭；n=4.0 要求四指都贴近；sigma 越小越严（0.05：1cm→0.78, 2cm→0.46, 5cm→0.02）。
+LIFT_FOUR = {"n": 0.0, "sigma": 0.05}
+
+
+def _four_near_gate(env: ManagerBasedRLEnv, ema_alpha: float = 0.1) -> torch.Tensor:
+    """(N,) 四指尖贴近门 0~1：Σ(1−tanh(盒距/σ)) 过 (n−0.5) 的软计数（EMA 平滑防瞬碰）。"""
+    n_req = float(LIFT_FOUR["n"])
+    if n_req <= 0.0:
+        return torch.ones(env.num_envs, device=env.device)
+    sigma = float(LIFT_FOUR["sigma"])
+    tips = [_FINGERTIP_NAMES[i] for i in list(ACTIVE_FOUR_INDICES)]
+    per = torch.stack([1.0 - torch.tanh(_tip_cube_box_dist(env, n) / sigma) for n in tips], dim=1)
+    s = per.sum(dim=-1)
+    if not hasattr(env, "_four_near_ema") or env._four_near_ema.shape[0] != s.shape[0]:
+        env._four_near_ema = s.clone()
+    env._four_near_ema = ema_alpha * s + (1.0 - ema_alpha) * env._four_near_ema
+    if hasattr(env, "episode_length_buf") and env.episode_length_buf is not None:
+        rm = env.episode_length_buf <= 1
+        if torch.any(rm):
+            env._four_near_ema[rm] = s[rm]
+    return torch.sigmoid((env._four_near_ema - (n_req - 0.5)) / 0.5)
+
+
+def _finger_j123_ids(robot) -> list:
+    """四指 (j1,j2,j3) 关节下标（缓存）。"""
+    if not hasattr(robot, "_cur_j123_ids"):
+        ids = []
+        for f in ("index", "middle", "ring", "little"):
+            t = []
+            for j in ("1", "2", "3"):
+                ij, _ = robot.find_joints(f"{f}{j}_joint")
+                t.append(int(ij[0]))
+            ids.append(tuple(t))
+        robot._cur_j123_ids = ids
+    return robot._cur_j123_ids
+
+
+def four_pose_ref_reward(
+    env: ManagerBasedRLEnv, ref: tuple = (0.0, 0.85, 1.30), sigma: float = 0.35
+) -> torch.Tensor:
+    """[S3 自然指形] 四指各自 (j1,j2,j3) 向参考姿态 (0, 0.85, 1.30) 的吸引（两侧平均，0~1）。
+
+    参考值取自 8 维成功策略的保持姿态（四指统一、温和卷曲、自然观感；不顶限位）。
+    作用：把 16 维冗余下学出的"折死大钩"手指拉回统一姿态；同时给够不到的指头创造落点。
+    回退/关闭：weight=0；调 σ（0.25 更严 / 0.5 更松）与权重（0.5 起步）。
+    """
+    robot = env.scene["robot"]
+    q = robot.data.joint_pos
+    per = []
+    for ids in _finger_j123_ids(robot):
+        r = torch.tensor(ref, device=q.device, dtype=q.dtype)
+        d = (q[:, list(ids)] - r).abs()
+        per.append((1.0 - torch.tanh(d / sigma)).mean(dim=-1))
+    return torch.stack(per, dim=0).mean(dim=0)
+
+
+def four_contact_reward(env: ManagerBasedRLEnv, thr: float = 0.15, soft: float = 0.05) -> torch.Tensor:
+    """[S2 四指参与度] 拇指对置在接触的前提下，四指中每多一根 > thr 就多付 1/4 的钱。
+
+    = gateT × mean(per_i)（0~1）。与 contact_gate 的 per_i 同口径；拇指门控防"四指推 cube"薅分。
+    作用：给"第 3/4 根手指压上来"一个平滑、密集的梯度（不像硬 k=3 那样把提起奖励一刀断掉）。
+    回退/关闭：weight=0。
+    """
+    forces = _fingertip_force_vectors(env)
+    mag = torch.norm(forces, dim=-1)
+    thumb = mag[:, 0]
+    four = mag[:, list(ACTIVE_FOUR_INDICES)]
+    per = torch.sigmoid((four - thr) / soft)
+    gateT = torch.sigmoid((thumb - thr) / soft)
+    return gateT * per.mean(dim=-1)
+
+
+def _gate_k(env: ManagerBasedRLEnv) -> float:
+    """从 contact_gate 项读"至少几根手指"k（默认 1.0）。
+
+    [S1] k 现在也是课程/末态参数（1→3，要求四指至少 3 根参与）；提起链与门控链必须同口径，
+    否则会出现"contact_gate 要求3根、而 lift 链只认1根"的错配（实测 lift 分数不受影响）。
+    """
+    try:
+        rm = env.reward_manager
+        p = rm._term_cfgs[rm._term_names.index("contact_gate")].params
+        return float(p.get("k", 1.0))
+    except Exception:  # noqa: BLE001
+        return 1.0
+
 
 def _gate_lift_params(env: ManagerBasedRLEnv) -> tuple[float, float]:
     """[v46 课程化] 提起门控参数（deadzone/scale）：全局 GATE_LIFT 单一来源，课程可渐变。
@@ -666,7 +752,7 @@ def _lift_gate(
         _dz, _sc = _gate_lift_params(env)
         deadzone = _dz if deadzone is None else deadzone
         scale = _sc if scale is None else scale
-    q = _good_contact(env)
+    q = _good_contact(env, k=_gate_k(env))
     if not hasattr(env, "_opp_ema") or env._opp_ema.shape[0] != q.shape[0]:
         env._opp_ema = torch.zeros_like(q)
     env._opp_ema = ema_alpha * q + (1.0 - ema_alpha) * env._opp_ema
@@ -675,7 +761,8 @@ def _lift_gate(
         if torch.any(rm):
             env._opp_ema[rm] = 0.0
     g_force = torch.tanh(torch.clamp(env._opp_ema - deadzone, min=0.0) / scale)
-    return g_force * _contact_alignment(env)
+    # [S4] 四指贴近门（n=0 时恒 1=不启用）：提起大钱要求四指尖都在 cube 面附近
+    return g_force * _contact_alignment(env) * _four_near_gate(env)
 
 
 def palm_cube_rel_pose_penalty(
@@ -808,8 +895,8 @@ def lift_without_grip_penalty(
         if torch.any(rm):
             env._cube_z_start = torch.where(rm, z, env._cube_z_start)
     gain = torch.clamp(z - env._cube_z_start - deadzone, min=0.0, max=max_height) / max_height
-    # [v39] 与门控同口径：弱 = 1 − good_contact（每指阈值+计数质量）
-    weak = 1.0 - _good_contact(env)
+    # [v39] 与门控同口径：弱 = 1 − good_contact（每指阈值+计数质量）；[S1] k 同步读 contact_gate 项
+    weak = 1.0 - _good_contact(env, k=_gate_k(env))
     return gain * weak
 
 

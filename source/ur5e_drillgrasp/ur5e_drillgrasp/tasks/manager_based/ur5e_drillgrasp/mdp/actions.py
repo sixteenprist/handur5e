@@ -35,7 +35,7 @@ INDEP_MIX = {"alpha": 0.0}
 
 
 class GroupedHandAction(ActionTerm):
-    """手指分组动作：拇指独立 4 通道；四指支持共享 4 通道（8维）或各自 j2/j3 独立（12维）。"""
+    """手指分组动作：拇指独立 4 通道；四指支持共享（8维）/ j2j3 独立（12维）/ j1j2j3 独立（16维）。"""
     cfg: "GroupedHandActionCfg"
 
     def __init__(self, cfg, env: ManagerBasedEnv):
@@ -56,7 +56,9 @@ class GroupedHandAction(ActionTerm):
         self._n_thumb = len(self._thumb_ids)
         self._n_per_finger = 4  # 每指4关节
 
-        # [v50 12维] 动作维度按模式决定：shared/middle=拇指4+共享4；independent_j23=拇指4+四指各自j2/j3=8
+        # [v50 12维 / v53 16维] 动作维度按模式决定：
+        #   shared/middle = 拇指4+共享4；independent_j23 = 拇指4+四指各自j2/j3=8；
+        #   independent_j123 = 拇指4+四指各自(j1,j2,j3)=12 → 总动作 4+12=16
         if cfg.four_mode == "independent_j23":
             self._finger_j23 = []
             for f in ("index", "middle", "ring", "little"):
@@ -64,6 +66,16 @@ class GroupedHandAction(ActionTerm):
                 i3, _ = self._asset.find_joints(f"{f}3_joint")
                 self._finger_j23.append((int(i2[0]), int(i3[0])))
             self._action_dim = self._n_thumb + 8
+        elif cfg.four_mode == "independent_j123":
+            self._finger_j123 = []
+            for f in ("index", "middle", "ring", "little"):
+                ids = []
+                for j in ("1", "2", "3"):
+                    ij, _ = self._asset.find_joints(f"{f}{j}_joint")
+                    ids.append(int(ij[0]))
+                self._finger_j123.append(tuple(ids))
+            self._action_dim = self._n_thumb + 12
+            print(f"[GroupedHandAction] 16维模式 j1/j2/j3 映射: {self._finger_j123}", flush=True)
         else:
             self._action_dim = self._n_thumb + 4   # 拇指4(独立) + 四指共享4
         self._raw_actions = torch.zeros(env.num_envs, self._action_dim, device=env.device)
@@ -80,19 +92,19 @@ class GroupedHandAction(ActionTerm):
         #   "shared"（历史/四指实验）：同一通道值写入 食/中/无/小 四指对应关节
         #   "independent_j23"（[v50] 12维中间档）：食/中/无/小 各自 j2/j3 独立；
         #       j1/j4 目标恒为预设（实机 j4 与 j3 耦合、用户定按 0° 处理）
-        if cfg.four_mode not in ("middle", "shared", "independent_j23"):
+        if cfg.four_mode not in ("middle", "shared", "independent_j23", "independent_j123"):
             raise ValueError(
-                f"four_mode 只支持 'middle'/'shared'/'independent_j23'，收到 {cfg.four_mode!r}"
+                f"four_mode 只支持 'middle'/'shared'/'independent_j23'/'independent_j123'，收到 {cfg.four_mode!r}"
             )
         self._four_map = []
-        if cfg.four_mode != "independent_j23":
+        if cfg.four_mode not in ("independent_j23", "independent_j123"):
             for i in range(self._n_per_finger):
                 group = []
                 for ids in (self._index_ids, self._middle_ids, self._ring_ids, self._little_ids):
                     if i < len(ids):
                         group.append(ids[i])
                 self._four_map.append(group)
-        else:
+        elif cfg.four_mode == "independent_j23":
             print(f"[GroupedHandAction] 12维模式 j2/j3 映射: {self._finger_j23}", flush=True)
 
     @property
@@ -132,8 +144,8 @@ class GroupedHandAction(ActionTerm):
             self._raw_actions[:, frozen] = self._raw_actions[:, frozen] * thaw
 
         thumb_act = actions[:, :self._n_thumb]
-        # [v50] 四指通道数随模式：shared/middle=4；independent_j23=8（每指 j2/j3）
-        n_four = 8 if self.cfg.four_mode == "independent_j23" else 4
+        # [v50] 四指通道数随模式：shared/middle=4；independent_j23=8；independent_j123=12
+        n_four = {"independent_j23": 8, "independent_j123": 12}.get(self.cfg.four_mode, 4)
         four_act = actions[:, self._n_thumb:self._n_thumb + n_four]
 
         full_action = torch.zeros(
@@ -166,6 +178,21 @@ class GroupedHandAction(ActionTerm):
             for k, (i2, i3) in enumerate(self._finger_j23):
                 full_action[:, i2] = four_act[:, 2 * k]
                 full_action[:, i3] = four_act[:, 2 * k + 1]
+        elif self.cfg.four_mode == "independent_j123":
+            # [v53 16维] 每指 3 通道 (j1,j2,j3)；j4 不写（保持预设）。
+            # 独立性课程 α：a_i ← α·a_i + (1−α)·a_食指（同 12 维，共享参考取食指通道防噪声腰斩）
+            alpha = float(INDEP_MIX.get("alpha", 1.0))
+            if alpha < 1.0:
+                n = four_act.shape[0]
+                ref = four_act[:, 0:3]                         # (N,3) 食指三通道
+                a = four_act.view(n, 4, 3)
+                a = alpha * a + (1.0 - alpha) * ref.unsqueeze(1)
+                four_act = a.reshape(n, 12)
+            for k, (i1, i2, i3) in enumerate(self._finger_j123):
+                # j1 限幅（防四指侧摆互挤）；j2/j3 不限
+                full_action[:, i1] = four_act[:, 3 * k].clamp(-self.cfg.j1_limit, self.cfg.j1_limit)
+                full_action[:, i2] = four_act[:, 3 * k + 1]
+                full_action[:, i3] = four_act[:, 3 * k + 2]
         else:  # "shared"：历史四指共享（食/中/无/小 同一通道值）
             for i, joint_ids in enumerate(self._four_map):
                 if len(joint_ids) > 0:
@@ -213,7 +240,12 @@ class GroupedHandActionCfg(ActionTermCfg):
     # [2026-09-22 可扩展·单一开关] 四指通道的落点：
     #   "middle" = 仅中指；"shared" = 四指共享（8维，v49 现状）；
     #   "independent_j23" = 四指各自 j2/j3 独立（12维，v50 中间档；j1/j4 恒预设）
+    #   "independent_j123" = 四指各自 j1/j2/j3 独立（16维，v53 最终档；j4 恒预设）——对齐实机 16 自由度
     four_mode: str = "middle"
+    # [j1 限幅] 四指 j1(侧摆/内收)的动作增量限幅（rad）。防"食/中相向靠拢互挤"——
+    #   play 实测食 j1=+0.09 / 中 j1=−0.09 互相占位，把 middle 挤到折钩、碰不到 cube。
+    #   0.10≈6°（人手 MCP 侧摆量级）；调大更自由，调小更规矩；只作用于 independent_j123。
+    j1_limit: float = 0.10
     # [2026-09-15 对齐·防呆] 原默认值 0.05，但 env_cfg 一直显式传入 1.0（实际生效值 = 1.0；
     #   0.05 从未生效，曾被误读为"手指动程仅 ±3°"的警报源）。改为与实例值一致，防再次误读。
     scale: float = 1.0

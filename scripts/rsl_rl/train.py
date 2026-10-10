@@ -38,6 +38,12 @@ parser.add_argument(
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
+parser.add_argument(
+    "--final",
+    action="store_true",
+    default=False,
+    help="[交付] 在自动课程末态=最终部署配置下训练/微调（关课程、门控终值、t2 自由、k=3）。",
+)
 args_cli, hydra_args = parser.parse_known_args()
 
 # always enable cameras to record video
@@ -133,6 +139,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # set the environment seed
     # note: certain randomizations occur in the environment initialization so we set the seed here
+    if getattr(args_cli, "final", False):
+        import importlib
+
+        _m = importlib.import_module(
+            "ur5e_drillgrasp.tasks.manager_based.ur5e_drillgrasp.ur5e_drillgrasp_env_cfg"
+        )
+        _m.apply_final_deploy_overrides(env_cfg)
+        print("[INFO] --final: 已应用末态/最终部署配置（微调模式）")
+
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     # check for invalid combination of CPU device with distributed training

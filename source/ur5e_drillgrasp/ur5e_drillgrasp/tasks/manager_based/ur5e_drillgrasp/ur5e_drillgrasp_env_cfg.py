@@ -209,9 +209,10 @@ class ActionsCfg:
         scale=1.0,
         # [v33 四指模式] "middle"→"shared"：四通道同时驱动 食/中/无/小（共享）。
         #   回退："middle"。
-        # [v50] 12维中间档：四指各自 j2/j3 独立（动作总维 = 臂6 + 手12 = 18）；
-        #   回退到 8 维共享：改回 "shared"。
-        four_mode="independent_j23",
+        # [v53] 16维最终档：四指各自 j1/j2/j3 独立（动作总维 = 臂6 + 手16 = 22）；
+        #   对齐实机 16 自由度（j4~j3 耦合，暂按 0°）。回退：12维="independent_j23"、8维="shared"。
+        four_mode="independent_j123",
+        j1_limit=0.10,  # [j1 限幅] ±6°，防四指侧摆互挤（play 实测食/中相向占位）
         # [v42 从头跑配方] 冻结 t2：v41 从头(t2 自由)在 stage0 停滞 4 小时(gate 0.03)；
         #   v29/v34 从头成功的共同配方都是 t2 冻结 → 恢复 (1,)。稳后由课程后期再解冻。
         frozen_channels=(1,),
@@ -467,6 +468,20 @@ class RewardsCfg:
     )
     # [v7 legacy 启用·力方向] 接触力沿 cube 局部 y 的占比（力度加权）：防"斜擦棱角/压顶"，
     #   把接触几何往"正向对夹"引导。无接触≈0、不与其它项打架。回退：weight=0。
+    # [S2 四指参与度] 软付款：拇指对置接触时，四指每多一根 >0.15N 多付 1/4。
+    #   初始 0（不动早期配方），课程 anneal_four_contact 在学会后渐入到 1.5。
+    four_contact: RewTerm = RewTerm(
+        func=mdp.four_contact_reward,
+        weight=0.0,
+        params={},
+    )
+    # [S3 自然指形] 四指 (j1,j2,j3) 向参考姿态 (0,0.85,1.30) 的软吸引（治"折死大钩"、统一手型）。
+    #   初始 0；课程 anneal_four_pose_ref 学会后渐入到 0.5。
+    four_pose_ref: RewTerm = RewTerm(
+        func=mdp.four_pose_ref_reward,
+        weight=0.0,
+        params={"sigma": 0.6},   # [S3b] 0.35→0.6：远处手指梯度太小拉不动，放宽核
+    )
     contact_align: RewTerm = RewTerm(
         func=mdp.contact_alignment_reward,
         # [v17e·回退保持] 1.0（不参与本轮）。回退 1.0。
@@ -683,10 +698,10 @@ class CurriculumCfg:
         params={
             "target_alpha": 1.0,
             "threshold": 0.5,
-            "num_steps": 16000,   # [v52b] 12k→16k：独立化更慢，防"解锁过快→捏合散架"
+            "num_steps": 30000,   # [v53b] 16k→30k：16维更敏感（实测 1560→1600 解锁早期崩）
+            "gate_min_scale": 1.0,  # [v53b] 0→1：等远起阶梯到最终档（更多巩固）再解锁独立性
             "check_every": 240,
             "require_k": 3,
-            "gate_min_scale": 0.0,
             "pause_below": 0.35,
         },
     )
@@ -698,6 +713,46 @@ class CurriculumCfg:
             "after_term": "indep_mix",
             "threshold": 0.5,
             "num_steps": 12000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 0.0,
+            "pause_below": 0.35,
+        },
+    )
+    anneal_four_contact = CurrTerm(
+        func=mdp.curriculum_reward_anneal,
+        params={
+            "term_name": "four_contact",
+            "target_weight": 1.5,   # [S2] 学会后渐入"四指参与度"付款
+            "threshold": 0.5,
+            "num_steps": 6000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 0.0,
+            "pause_below": 0.35,
+        },
+    )
+    anneal_four_pose_ref = CurrTerm(
+        func=mdp.curriculum_reward_anneal,
+        params={
+            "term_name": "four_pose_ref",
+            "target_weight": 1.0,   # [S3b] 学会后渐入"自然指形"吸引
+            "threshold": 0.5,
+            "num_steps": 6000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 0.0,
+            "pause_below": 0.35,
+        },
+    )
+    anneal_gate_k = CurrTerm(
+        func=mdp.curriculum_param_anneal,
+        params={
+            "term_name": "contact_gate",
+            "key": "k",
+            "target_value": 3.0,   # [S1] 学会后把"至少 1 根"收紧到"至少 3 根"（四指参与）
+            "threshold": 0.5,
+            "num_steps": 6000,
             "check_every": 240,
             "require_k": 3,
             "gate_min_scale": 0.0,
@@ -853,6 +908,16 @@ def apply_final_deploy_overrides(cfg) -> None:
     INDEP_MIX["alpha"] = 1.0
     FLEX_MIX["min_w"] = 0.5
     cfg.rewards.contact_gate.params["thr"] = 0.15
+    # [S2·四指参与] 末态不硬抬 k（实测 k=3 直跳会让策略"退开"、指标下滑）：
+    #   保持 k=1，改用 four_contact 软付款（1.5）把第 3/4 根手指平滑拉上来。
+    cfg.rewards.four_contact.weight = 1.5
+    # [S3b] 末态启用"自然指形"参考吸引（权重 0.5→1.0，配合 σ0.6 才能真正掰动手型）
+    cfg.rewards.four_pose_ref.weight = 1.0
+    # [S4] 末态启用"四指贴近门"：提起链要求四指中至少 n 根贴近 cube 面（σ0.05）。
+    #   n=3：当前只差食指（中/无/小已贴近）→ 立刻解锁部分提分并给出"拉近食指"的梯度；
+    #   稳定后可升到 4。回退：n=0（关闭）。
+    from .mdp import rewards as _rw
+    _rw.LIFT_FOUR["n"] = 4.0   # 阶梯第二档：三指已稳(食已拉进 0.9cm)，收口到"四指全贴近"
     cfg.rewards.tip_progress.weight = 0.0
     cfg.rewards.tcp_reach.weight = 0.5
     cfg.rewards.cube_motion.weight = -0.8
