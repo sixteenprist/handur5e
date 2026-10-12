@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 from typing import TYPE_CHECKING
 
@@ -31,7 +33,8 @@ if TYPE_CHECKING:
 
 # [v50 课程化] 四指独立性 α（1=各指独立；0=四指按关节组均值同步=共享行为）。
 #   12 维早期探索太难 → α 从 0 起步（等价 8 维共享，快速学会捏合），学会后课程渐开到 1。
-INDEP_MIX = {"alpha": 0.0}
+# 初值可由环境变量 INDEP_MIX0 指定（续训保值：重启不把 α 跳回 0，避免动作语义突变）
+INDEP_MIX = {"alpha": float(os.environ.get("INDEP_MIX0", "0") or 0.0)}
 
 
 class GroupedHandAction(ActionTerm):

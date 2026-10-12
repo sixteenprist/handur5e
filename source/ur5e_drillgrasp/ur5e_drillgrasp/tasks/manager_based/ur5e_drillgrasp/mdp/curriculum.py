@@ -146,6 +146,7 @@ def curriculum_reward_anneal(
                 setattr(env, key + "_started", True)
                 setattr(env, key + "_w0", float(rm._term_cfgs[idx].weight))
                 setattr(env, key + "_t0", int(env._cur_cnt))
+                setattr(env, key + "_last", int(env._cur_cnt))
                 print(
                     f"[curriculum] {term_name} 退火触发: {float(getattr(env, key+'_w0')):.3f} → {target_weight}（{num_steps} 次调用）",
                     flush=True,
@@ -154,11 +155,14 @@ def curriculum_reward_anneal(
             w0 = float(getattr(env, key + "_w0"))
             t0 = int(getattr(env, key + "_t0"))
             # [v47 保护] 退化即暂停：EMA 掉到 pause_below 以下时冻结进度（不推进退火）
+            # [pause-fix] 暂停只计"两次调用之间增长的量"（旧式 shift=cnt-t0-held 会把历史进度整段计入→有效进度归零）
+            cnt_now = int(env._cur_cnt)
             if pause_below is not None and ema < float(pause_below):
-                shift = int(env._cur_cnt) - t0 - int(getattr(env, key + "_held", 0))
-                setattr(env, key + "_held", int(getattr(env, key + "_held", 0)) + shift)
+                last = int(getattr(env, key + "_last", cnt_now))
+                setattr(env, key + "_held", int(getattr(env, key + "_held", 0)) + max(0, cnt_now - last))
                 if int(getattr(env, key + "_held", 0)) % 2000 < 20:
                     print(f"[curriculum] {term_name} 退火暂停(ema={ema:.3f}<{pause_below})", flush=True)
+            setattr(env, key + "_last", cnt_now)
             t0 = int(getattr(env, key + "_t0")) + int(getattr(env, key + "_held", 0))
             frac = min(1.0, max(0.0, (int(env._cur_cnt) - t0) / float(max(1, num_steps))))
             rm._term_cfgs[idx].weight = w0 + (target_weight - w0) * frac
@@ -210,6 +214,7 @@ def curriculum_param_anneal(
                 setattr(env, astate + "_started", True)
                 setattr(env, astate + "_v0", float(term.params.get(key, target_value)))
                 setattr(env, astate + "_t0", int(env._cur_cnt))
+                setattr(env, astate + "_last", int(env._cur_cnt))
                 print(
                     f"[curriculum] {term_name}.{key} 渐变触发: {float(getattr(env, astate+'_v0')):.3f} → {target_value}（{num_steps} 次调用）",
                     flush=True,
@@ -217,9 +222,12 @@ def curriculum_param_anneal(
         if getattr(env, astate + "_started", False) and not done:
             v0 = float(getattr(env, astate + "_v0"))
             t0 = int(getattr(env, astate + "_t0"))
+            # [pause-fix] 暂停只计两次调用间增长量（防进度归零）
+            cnt_now = int(env._cur_cnt)
             if pause_below is not None and ema < float(pause_below):
-                shift = int(env._cur_cnt) - t0 - int(getattr(env, astate + "_held", 0))
-                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + shift)
+                last = int(getattr(env, astate + "_last", cnt_now))
+                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + max(0, cnt_now - last))
+            setattr(env, astate + "_last", cnt_now)
             t0 = t0 + int(getattr(env, astate + "_held", 0))
             frac = min(1.0, max(0.0, (int(env._cur_cnt) - t0) / float(max(1, num_steps))))
             term.params[key] = v0 + (target_value - v0) * frac
@@ -263,13 +271,17 @@ def curriculum_unfreeze(
             if cond and ok_cnt >= require_k:
                 setattr(env, astate + "_started", True)
                 setattr(env, astate + "_t0", int(env._cur_cnt))
+                setattr(env, astate + "_last", int(env._cur_cnt))
                 setattr(env, astate + "_held", 0)
                 print(f"[curriculum] 软解冻开始: thaw 0→1（{num_steps} 次调用）", flush=True)
         if getattr(env, astate + "_started", False) and not done:
             t0 = int(getattr(env, astate + "_t0"))
+            # [pause-fix] 暂停只计两次调用间增长量（防进度归零）
+            cnt_now = int(env._cur_cnt)
             if pause_below is not None and ema < float(pause_below):
-                shift = int(env._cur_cnt) - t0 - int(getattr(env, astate + "_held", 0))
-                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + shift)
+                last = int(getattr(env, astate + "_last", cnt_now))
+                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + max(0, cnt_now - last))
+            setattr(env, astate + "_last", cnt_now)
             t0 = t0 + int(getattr(env, astate + "_held", 0))
             frac = min(1.0, max(0.0, (int(env._cur_cnt) - t0) / float(max(1, num_steps))))
             n = 0
@@ -322,6 +334,7 @@ def curriculum_gate_lift_anneal(
                 setattr(env, astate + "_started", True)
                 setattr(env, astate + "_v0", (float(GATE_LIFT["deadzone"]), float(GATE_LIFT["scale"])))
                 setattr(env, astate + "_t0", int(env._cur_cnt))
+                setattr(env, astate + "_last", int(env._cur_cnt))
                 print(
                     f"[curriculum] GATE_LIFT 收紧触发: {getattr(env, astate+'_v0')} → ({target_deadzone}, {target_scale})（{num_steps} 次调用）",
                     flush=True,
@@ -395,14 +408,18 @@ def curriculum_hand_preclose_anneal(
             if cond and ok_cnt >= require_k:
                 setattr(env, astate + "_started", True)
                 setattr(env, astate + "_t0", int(env._cur_cnt))
+                setattr(env, astate + "_last", int(env._cur_cnt))
                 print(f"[curriculum] 手部预闭合开始退回（{num_steps} 次调用）", flush=True)
         if getattr(env, astate + "_started", False) and not done:
             orig = getattr(env, astate + "_orig")
             ids = getattr(env, astate + "_ids")
             t0 = int(getattr(env, astate + "_t0"))
+            # [pause-fix] 暂停只计两次调用间增长量（防进度归零）
+            cnt_now = int(env._cur_cnt)
             if pause_below is not None and ema < float(pause_below):
-                shift = int(env._cur_cnt) - t0 - int(getattr(env, astate + "_held", 0))
-                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + shift)
+                last = int(getattr(env, astate + "_last", cnt_now))
+                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + max(0, cnt_now - last))
+            setattr(env, astate + "_last", cnt_now)
             t0 = t0 + int(getattr(env, astate + "_held", 0))
             frac = min(1.0, max(0.0, (int(env._cur_cnt) - t0) / float(max(1, num_steps))))
             d = robot.data.default_joint_pos
@@ -451,14 +468,18 @@ def curriculum_flex_mix_anneal(
                 setattr(env, astate + "_started", True)
                 setattr(env, astate + "_v0", float(_rw.FLEX_MIX["min_w"]))
                 setattr(env, astate + "_t0", int(env._cur_cnt))
+                setattr(env, astate + "_last", int(env._cur_cnt))
                 setattr(env, astate + "_held", 0)
                 print(f"[curriculum] FLEX_MIX 渐入触发: {_rw.FLEX_MIX['min_w']:.2f} → {target_min_w}", flush=True)
         if getattr(env, astate + "_started", False) and not done:
             v0 = float(getattr(env, astate + "_v0"))
             t0 = int(getattr(env, astate + "_t0"))
+            # [pause-fix] 暂停只计两次调用间增长量（防进度归零）
+            cnt_now = int(env._cur_cnt)
             if pause_below is not None and ema < float(pause_below):
-                shift = int(env._cur_cnt) - t0 - int(getattr(env, astate + "_held", 0))
-                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + shift)
+                last = int(getattr(env, astate + "_last", cnt_now))
+                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + max(0, cnt_now - last))
+            setattr(env, astate + "_last", cnt_now)
             t0 = t0 + int(getattr(env, astate + "_held", 0))
             frac = min(1.0, max(0.0, (int(env._cur_cnt) - t0) / float(max(1, num_steps))))
             _rw.FLEX_MIX["min_w"] = v0 + (target_min_w - v0) * frac
@@ -503,17 +524,80 @@ def curriculum_indep_mix_anneal(
             if cond and ok_cnt >= require_k:
                 setattr(env, astate + "_started", True)
                 setattr(env, astate + "_t0", int(env._cur_cnt))
+                setattr(env, astate + "_last", int(env._cur_cnt))
                 setattr(env, astate + "_held", 0)
-                print(f"[curriculum] 独立性 α 渐开: 0→{target_alpha}（{num_steps} 次调用）", flush=True)
+                setattr(env, astate + "_v0", float(INDEP_MIX["alpha"]))
+                print(
+                    f"[curriculum] 独立性 α 渐开: {float(INDEP_MIX['alpha']):.2f}→{target_alpha}（{num_steps} 次调用）",
+                    flush=True,
+                )
         if getattr(env, astate + "_started", False) and not done:
             t0 = int(getattr(env, astate + "_t0"))
+            # [pause-fix] 暂停只计两次调用间增长量（防进度归零）
+            cnt_now = int(env._cur_cnt)
             if pause_below is not None and ema < float(pause_below):
-                shift = int(env._cur_cnt) - t0 - int(getattr(env, astate + "_held", 0))
-                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + shift)
+                last = int(getattr(env, astate + "_last", cnt_now))
+                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + max(0, cnt_now - last))
+            setattr(env, astate + "_last", cnt_now)
             t0 = t0 + int(getattr(env, astate + "_held", 0))
             frac = min(1.0, max(0.0, (int(env._cur_cnt) - t0) / float(max(1, num_steps))))
-            INDEP_MIX["alpha"] = frac * target_alpha
+            _v0 = float(getattr(env, astate + "_v0", 0.0))
+            INDEP_MIX["alpha"] = _v0 + (target_alpha - _v0) * frac
             if frac >= 1.0:
                 setattr(env, astate + "_done", True)
                 print(f"[curriculum] 独立性 α 渐开完成: α={target_alpha}", flush=True)
     return float(INDEP_MIX["alpha"])
+
+
+def curriculum_lift_four_anneal(
+    env: "ManagerBasedRLEnv",
+    env_ids=None,
+    target_n: float = 4.0,
+    threshold: float = 0.5,
+    num_steps: int = 12000,
+    check_every: int = 240,
+    require_k: int = 3,
+    gate_min_scale: float | None = None,
+    after_term: str | None = None,
+    pause_below: float | None = None,
+    ema_alpha: float = 0.001,
+    **kwargs,
+) -> float:
+    """[S4 课程] 四指贴近门 LIFT_FOUR.n 从 0 渐到 target（学会后收紧"提起需四指贴近"）。
+
+    经验：n=4 直跳太陡（lift 掉到 1.5）；微调时用 n=3 过渡有效。此课程为从头跑提供
+    平滑 0→4（含退化暂停）。"""
+    from .rewards import LIFT_FOUR
+
+    ema = _signal_ema(env, ema_alpha)
+    astate = "_cur_anneal_lift_four"
+    done = getattr(env, astate + "_done", False)
+    if not done:
+        if _tick(env, check_every) and not getattr(env, astate + "_started", False):
+            far = float(_get_event_cfg(env, "reset_arm_far").params.get("scale", 0.0))
+            after_ok = True if after_term is None else bool(getattr(env, f"_cur_anneal_{after_term}_done", False))
+            cond = ema >= threshold and (gate_min_scale is None or far >= gate_min_scale - 1e-6) and after_ok
+            ok_cnt = int(getattr(env, astate + "_ok", 0))
+            ok_cnt = ok_cnt + 1 if cond else 0
+            setattr(env, astate + "_ok", ok_cnt)
+            if cond and ok_cnt >= require_k:
+                setattr(env, astate + "_started", True)
+                setattr(env, astate + "_t0", int(env._cur_cnt))
+                setattr(env, astate + "_last", int(env._cur_cnt))
+                setattr(env, astate + "_held", 0)
+                print(f"[curriculum] LIFT_FOUR.n 渐入: 0→{target_n}（{num_steps} 次调用）", flush=True)
+        if getattr(env, astate + "_started", False) and not done:
+            t0 = int(getattr(env, astate + "_t0"))
+            # [pause-fix] 暂停只计两次调用间增长量（防进度归零）
+            cnt_now = int(env._cur_cnt)
+            if pause_below is not None and ema < float(pause_below):
+                last = int(getattr(env, astate + "_last", cnt_now))
+                setattr(env, astate + "_held", int(getattr(env, astate + "_held", 0)) + max(0, cnt_now - last))
+            setattr(env, astate + "_last", cnt_now)
+            t0 = t0 + int(getattr(env, astate + "_held", 0))
+            frac = min(1.0, max(0.0, (int(env._cur_cnt) - t0) / float(max(1, num_steps))))
+            LIFT_FOUR["n"] = frac * target_n
+            if frac >= 1.0:
+                setattr(env, astate + "_done", True)
+                print(f"[curriculum] LIFT_FOUR.n 渐入完成: {target_n}", flush=True)
+    return float(LIFT_FOUR["n"])

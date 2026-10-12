@@ -699,7 +699,9 @@ class CurriculumCfg:
             "target_alpha": 1.0,
             "threshold": 0.5,
             "num_steps": 30000,   # [v53b] 16k→30k：16维更敏感（实测 1560→1600 解锁早期崩）
-            "gate_min_scale": 1.0,  # [v53b] 0→1：等远起阶梯到最终档（更多巩固）再解锁独立性
+            # [v6] 0：从头跑"早期解锁"（v53 成功先例；v5 实测"晚解锁"在 α>0.7 崩）；
+            #   续训用 INDEP_MIX0 保值即可。
+            "gate_min_scale": 0.0,
             "check_every": 240,
             "require_k": 3,
             "pause_below": 0.35,
@@ -743,20 +745,7 @@ class CurriculumCfg:
             "require_k": 3,
             "gate_min_scale": 0.0,
             "pause_below": 0.35,
-        },
-    )
-    anneal_gate_k = CurrTerm(
-        func=mdp.curriculum_param_anneal,
-        params={
-            "term_name": "contact_gate",
-            "key": "k",
-            "target_value": 3.0,   # [S1] 学会后把"至少 1 根"收紧到"至少 3 根"（四指参与）
-            "threshold": 0.5,
-            "num_steps": 6000,
-            "check_every": 240,
-            "require_k": 3,
-            "gate_min_scale": 0.0,
-            "pause_below": 0.35,
+            "after_term": "four_contact",   # [错开] S2 完成后再上 S3
         },
     )
     anneal_gate_lift = CurrTerm(
@@ -806,6 +795,21 @@ class CurriculumCfg:
             "pause_below": 0.35,
         },
     )
+    # [消融收口] 四项"学会后渐退到 0"（早期脚手架保留、末态简化）：
+    #   ①tcp_reach 1.5→0 ②thumb_face_reach 3→0 ③finger_close 1→0 ④fingertip_press −0.2→0
+    anneal_lift_four = CurrTerm(
+        func=mdp.curriculum_lift_four_anneal,
+        params={
+            "target_n": 4.0,   # [S4 课程] 四指贴近门 0→4（学会后渐紧）
+            "threshold": 0.5,
+            "num_steps": 12000,
+            "check_every": 240,
+            "require_k": 3,
+            "gate_min_scale": 0.0,
+            "pause_below": 0.35,
+            "after_term": "four_pose_ref",   # [错开] S3 完成后再上贴近门
+        },
+    )
     anneal_tip_progress = CurrTerm(
         func=mdp.curriculum_reward_anneal,
         params={
@@ -824,7 +828,7 @@ class CurriculumCfg:
         func=mdp.curriculum_reward_anneal,
         params={
             "term_name": "tcp_reach",
-            "target_weight": 0.5,
+            "target_weight": 0.0,   # [消融①] 1.5→0
             "threshold": 0.5,
             "num_steps": 12000,
             "check_every": 240,
@@ -918,8 +922,17 @@ def apply_final_deploy_overrides(cfg) -> None:
     #   稳定后可升到 4。回退：n=0（关闭）。
     from .mdp import rewards as _rw
     _rw.LIFT_FOUR["n"] = 4.0   # 阶梯第二档：三指已稳(食已拉进 0.9cm)，收口到"四指全贴近"
+
+    # [消融 A/B 开关] 环境变量 ABLATE="tcp_reach,fingertip_press" → 对应奖励权重归 0（只影响本次进程）
+    import os as _os
+
+    for _t in _os.environ.get("ABLATE", "").split(","):
+        _t = _t.strip()
+        if _t and hasattr(cfg.rewards, _t):
+            setattr(getattr(cfg.rewards, _t), "weight", 0.0)
+            print(f"[ablate] {_t}.weight → 0", flush=True)
     cfg.rewards.tip_progress.weight = 0.0
-    cfg.rewards.tcp_reach.weight = 0.5
+    cfg.rewards.tcp_reach.weight = 0.0   # [消融①] 末态去掉接近残值（100% 验收下无退化）
     cfg.rewards.cube_motion.weight = -0.8
     cfg.rewards.cube_drift.weight = -1.5
 
