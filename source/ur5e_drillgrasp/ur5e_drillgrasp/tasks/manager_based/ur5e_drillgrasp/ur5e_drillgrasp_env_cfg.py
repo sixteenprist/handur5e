@@ -922,6 +922,8 @@ def apply_final_deploy_overrides(cfg) -> None:
     #   稳定后可升到 4。回退：n=0（关闭）。
     from .mdp import rewards as _rw
     _rw.LIFT_FOUR["n"] = 4.0   # 阶梯第二档：三指已稳(食已拉进 0.9cm)，收口到"四指全贴近"
+    # [实验记录] 轻触门(0.03N)与 action_rate −0.3 均实测过狠（30min~2h 掉到 lift~2.6 不恢复），
+    #   已回退——机制保留在 rewards.LIFT_FOUR["touch"]（默认 0=关），待换"软奖励"路线再试。
 
     # [消融 A/B 开关] 环境变量 ABLATE="tcp_reach,fingertip_press" → 对应奖励权重归 0（只影响本次进程）
     import os as _os

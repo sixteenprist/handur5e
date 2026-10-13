@@ -634,7 +634,7 @@ FLEX_MIX = {"min_w": 0.0}
 
 # [S4 四指贴近门] 提起前/提起时要求四指尖"贴近"cube 面（基于盒面距离，不要求接触力）。
 #   n=0 关闭；n=4.0 要求四指都贴近；sigma 越小越严（0.05：1cm→0.78, 2cm→0.46, 5cm→0.02）。
-LIFT_FOUR = {"n": 0.0, "sigma": 0.05}
+LIFT_FOUR = {"n": 0.0, "sigma": 0.05, "touch": 0.0, "touch_soft": 0.02}
 
 
 def _four_near_gate(env: ManagerBasedRLEnv, ema_alpha: float = 0.1) -> torch.Tensor:
@@ -645,6 +645,12 @@ def _four_near_gate(env: ManagerBasedRLEnv, ema_alpha: float = 0.1) -> torch.Ten
     sigma = float(LIFT_FOUR["sigma"])
     tips = [_FINGERTIP_NAMES[i] for i in list(ACTIVE_FOUR_INDICES)]
     per = torch.stack([1.0 - torch.tanh(_tip_cube_box_dist(env, n) / sigma) for n in tips], dim=1)
+    # [轻触因子] touch>0 时：每指必须"轻轻搭上"(力>touch)才算数（治"贴边不压"，如食指 0.2cm/0N）
+    touch = float(LIFT_FOUR.get("touch", 0.0))
+    if touch > 0.0:
+        fv = torch.norm(_fingertip_force_vectors(env), dim=-1)
+        four_f = fv[:, list(ACTIVE_FOUR_INDICES)]
+        per = per * torch.sigmoid((four_f - touch) / float(LIFT_FOUR.get("touch_soft", 0.02)))
     s = per.sum(dim=-1)
     if not hasattr(env, "_four_near_ema") or env._four_near_ema.shape[0] != s.shape[0]:
         env._four_near_ema = s.clone()
