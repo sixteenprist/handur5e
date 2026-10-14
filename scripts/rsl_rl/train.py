@@ -221,6 +221,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
+    # [2026-10-14 A·延迟鲁棒化] 观测/动作延迟随机化（环境变量开关，默认关 = 零影响）
+    #   DELAY_OBS_MAX=2 DELAY_ACT_MAX=1：每集每环境独立采样，集内不变（文献惯例）
+    _d_obs = int(os.environ.get("DELAY_OBS_MAX", "0"))
+    _d_act = int(os.environ.get("DELAY_ACT_MAX", "0"))
+    if _d_obs > 0 or _d_act > 0:
+        from ur5e_drillgrasp.tasks.manager_based.ur5e_drillgrasp.mdp.delay import DelayVecEnvWrapper
+
+        env = DelayVecEnvWrapper(env, obs_max=_d_obs, act_max=_d_act)
+        print(f"[INFO] 延迟鲁棒化已开启: DELAY_OBS_MAX={_d_obs}, DELAY_ACT_MAX={_d_act}", flush=True)
+
     # create runner from rsl-rl
     if agent_cfg.class_name == "OnPolicyRunner":
         runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
