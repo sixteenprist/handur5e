@@ -7,7 +7,14 @@
 
 设计（[v40 自动课程] 用户要求：把此前的"人工课程"写进代码，一次从头跑到尾）：
   - 信号：env.reward_manager._step_reward（每步已算好的加权项值）里 `lift_success`
-    项 ÷ 权重 → 成功率(0~1)，再 EMA（alpha≈0.001，τ≈1000 次调用）。
+    项 ÷ 权重 → 成功率(0~1)，再 EMA（alpha≈0.001；⚠️ 所有课程项共享同一 EMA 状态、每步
+    被 ~15 项各调一次 → 等效 ≈1.5%/步；见 _signal_ema 2026-10-15 校正）。
+
+  课程串行链（CurriculumCfg 的 after_term；其余项达阈值后并行推进）：
+      indep_mix → flex_mix
+      four_contact → four_pose_ref → lift_four            （S2 → S3b → S4 贴近门）
+      t2_unfreeze → tip_progress → tcp_reach              （解冻 → 收尾退火链）
+      并行项：arm_far / prepose / gate_thr / hand_preclose / gate_lift / cube_motion / cube_drift
   - 调用时机：CurriculumManager 在每次环境 reset 时调用（env_ids=本步重置的 env 子集），
     ≈ 每训练步一次；本函数内部用计数器每 `check_every` 次做一次判定。
   - 更新"活对象"（已核实 manager 每步从这些对象读取）：

@@ -432,29 +432,25 @@ class RewardsCfg:
 
     任务（用户设定）：手掌/指尖已在预置位姿，**手臂不再参与接近**；
           只学"手指对向夹住 → 给足力且稳定 → 提起 8cm"。
-    8 奖励 + 1 功能项，每项职责单一、口径不重复：
+    [2026-10-15 校正] 现行 19 项（权重以本类下方 term 定义为准；此前"8 奖励+1 功能项"为
+    v7 时代描述，已过期）。按阶段索引（实现见 rewards.py §3 同名分组）：
 
-      surface_proximity 1.0   指尖径向收拢（位置；margin 5cm）
-      contact_gate     2.0    两侧对向力 min 的即时付款（scale 0.1：0.05N→0.46、0.3N→0.98）
-      contact_align    1.0    接触力沿 cube ±y 的占比（防斜擦/压顶——力封闭方向）
-      contact_hold     1.5    接触占空比 EMA（力稳定，治断触/粘抖）
-      lift_height     15.0    净提升 8cm 饱和 × 带死区门控（对向力>0.06N 且方向对齐）
-      lift_success     5.0    净提升 ≥8cm 且仍抓握 → 1（唯一"稠密+稀疏"确认对）
-      action_rate     -0.15   平滑（防 1~2Hz 摆动）
-      fingertip_press -0.2    防"手指下压 cube"
-      cube_xy_clamp    0     功能项：每步锁定 cube xy/朝向（只留 z）
+      门控/接触质量  contact_gate 2.0 | contact_align 1.0 | contact_hold 2.0
+      S1 接近        tcp_reach 1.5(退火→0) | tip_progress 12.0(退火→0) | palm_cube_hold -1.0
+      S2 四指参与    four_contact 0.0→1.5(课程) | four_pose_ref 0.0→1.0(课程)
+      S2b 贴面/指形  surface_proximity 2.0 | finger_close 1.0 | thumb_face_reach 3.0 | fingertip_press -0.2
+      S3 提起/成功   lift_height 15.0 | lift_success 5.0 | lift_conform 1.5 | lift_without_grip -1.5
+      稳定/防漂      action_rate -0.15 | cube_motion 0.0→-0.8(课程) | cube_drift 0.0→-1.5(课程)
 
-    [v7 相对 v5 的变更] 删除：reach（按用户要求，手掌不再接近）、pinch_axis_align（与
-      contact_align 口径重复，力口径更直接）、finger_contact（与 contact_gate 重复，并入其
-      scale）、opposition_height（与居中/预设重叠，见翻转再加回）；新增 contact_align /
-      contact_hold（legacy 现成函数）。另修 _thumb_four_split 为"仅中指"（无名指碰撞关闭后
-      力项被稀释 2× 的坑）。
-    约定：拇指 vs 中指两指捏取；其余三指无碰撞、共享动作随动、不参与奖励。
+    [历史·v7 时代描述，保留备查] reach/pinch_axis_align/finger_contact/opposition_height 已删；
+      contact_align/contact_hold 为 legacy 现成函数。
+    现行约定（16 维四指独立线）：拇指 4 通道独立 + 食/中/无/小 各自 j1/j2/j3（j4 固定 0°）；
+      deploy 时 t2 自由、课程关、门控终值——见 apply_final_deploy_overrides。
     """
 
     # [v7 已删·用户要求] reach（TCP→质心）：手掌/指尖已在预置位姿，手臂不再参与接近，
     #   "手掌被往下拉向质心"的副作用一并去掉。恢复：weight=2.0, std=0.15（函数仍在 rewards.py）。
-    # ---- 抓握链（接触门控 + 力质量）----
+    # ── 门控/接触质量（contact_gate / align / hold）──────
     # [v7] scale 0.05→0.1：单一力口径项同时覆盖"轻碰"与"压紧"——
     #   0.02N→0.2、0.05N→0.46、0.16N→0.90、0.3N→0.98（旧 0.05 在 0.15N 即饱和、压紧无梯度；
     #   旧 finger_contact 与本项重复，已并入）。回退：0.05。
@@ -563,7 +559,7 @@ class RewardsCfg:
         weight=12.0,
         params={"metric": "box"},   # [v16] 与 surface 一致用盒面距离
     )
-    # ---- 提起链（链尾，× 门控）----
+    # ── S3 提起/成功（链尾，× 门控）──────
     lift_height: RewTerm = RewTerm(
         func=mdp.lift_height_reward,
         weight=15.0,
@@ -598,7 +594,7 @@ class RewardsCfg:
         weight=-1.5,
         params={"deadzone": 0.02, "max_height": 0.12, "force_ref": 0.2},
     )
-    # ---- 正则 / 防守 ----
+    # ── 稳定/防漂（惩罚项；与 rewards.py §3 同名分组）──────
     # [2026-09-21 v5.2 用户决定] action_rate -0.05→-0.15：实测 model_900 确定性动作步间
     #   变化 RMS 0.05~0.11/步（1~2Hz 摆动，接触力 std 53%）——旧权重每步仅 ≈0.004 分压不住。
     #   0.15 下 0.1/步摆动 ≈ -0.011/步（仍远小于任务项），只压高频、不挡正常接近/闭合。
