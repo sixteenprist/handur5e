@@ -39,7 +39,11 @@ def _get_event_cfg(env: "ManagerBasedRLEnv", term_name: str):
 
 
 def _signal_ema(env: "ManagerBasedRLEnv", alpha: float = 0.001) -> float:
-    """读 lift_success 项（归一化 0~1）并做 EMA。失败时保持旧值。"""
+    """读 lift_success 项（归一化 0~1）并做 EMA。失败时保持旧值。
+
+    [2026-10-15 校正] 所有课程项共享同一 EMA 状态 env._cur_ema；每步被 ~15 个课程项各调一次，
+    实际等效 α ≈ 15×alpha（默认 ≈1.5%/步），比"α=0.001/τ≈1000 步"的字面语义快约 15 倍。
+    """
     rm = env.reward_manager
     try:
         idx = rm._term_names.index(_SIGNAL_TERM)

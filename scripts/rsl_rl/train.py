@@ -42,7 +42,7 @@ parser.add_argument(
     "--final",
     action="store_true",
     default=False,
-    help="[交付] 在自动课程末态=最终部署配置下训练/微调（关课程、门控终值、t2 自由、k=3）。",
+    help="[交付] 在自动课程末态=最终部署配置下训练/微调（关课程、门控终值、t2 自由、contact_gate 保持 k=1、thr→0.15）。",
 )
 args_cli, hydra_args = parser.parse_known_args()
 

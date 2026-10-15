@@ -22,9 +22,9 @@
 
 用法（项目根目录）
 ------------------
-    # 全套矩阵（baseline + 8 条件）：
+    # 全套矩阵（baseline + 12 条件 = 13 场景）：
     python scripts/rsl_rl/eval_deploy.py \
-        --checkpoint logs/rsl_rl/ur5e_grasp_v5/best/grasp_v57_scratch_autofinal.pt \
+        --checkpoint logs/rsl_rl/ur5e_grasp_v5/best/grasp_v58_delayrobust.pt \
         --num_envs 100 --steps 300 --scenario all
 
     # 单项自定义：
@@ -44,13 +44,13 @@ parser.add_argument("--task", type=str, default="Template-Ur5e-Drillgrasp-v0", h
 parser.add_argument(
     "--checkpoint",
     type=str,
-    default="logs/rsl_rl/ur5e_grasp_v5/best/grasp_v57_scratch_autofinal.pt",
+    default="logs/rsl_rl/ur5e_grasp_v5/best/grasp_v58_delayrobust.pt",
     help="权重文件路径（.pt）",
 )
 parser.add_argument("--num_envs", type=int, default=100, help="评测环境数 = 集数（默认 100）")
 parser.add_argument("--steps", type=int, default=300, help="每集步数（默认 300 ≈ 10s@30Hz）")
 parser.add_argument("--scenario", type=str, default="all", help="all / baseline / 单项名 / custom")
-parser.add_argument("--beta", type=float, default=None, help="动作低通系数（1.0=不过滤；越大越平滑）")
+parser.add_argument("--beta", type=float, default=None, help="动作低通系数（1.0=不过滤；越小越平滑）")
 parser.add_argument("--delay", type=int, default=0, help="观测延迟步数（0=无延迟）")
 parser.add_argument("--rate-arm", type=float, default=None, help="手臂 raw 步间变化上限（None=不限制）")
 parser.add_argument("--noise-pos", type=float, default=0.0, help="关节位置观测噪声 σ（rad）")
@@ -284,7 +284,7 @@ def main():
     print("\n" + "=" * 72, flush=True)
     print("汇总表（真机部署裕度）", flush=True)
     print(
-        f"{'场景':<22}{'成功率':>8}{'提起mean':>10}{'提起min':>9}{'漂移mean':>10}{'漂移max':>9}{'手颤':>9}",
+        f"{'场景':<22}{'成功率':>8}{'提起mean':>11}{'提起min':>10}{'漂移mean':>11}{'漂移max':>10}{'手颤':>7}",
         flush=True,
     )
     for r in results:

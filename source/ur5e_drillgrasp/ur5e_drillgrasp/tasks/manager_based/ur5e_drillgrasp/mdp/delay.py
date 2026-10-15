@@ -25,7 +25,7 @@
 """
 
 import torch
-from tensordict import TensorDict  # noqa: F401  （类型标注用）
+# from tensordict import TensorDict  # [归档 2026-10-15] 未使用（仅注释提及）
 
 
 class DelayVecEnvWrapper:

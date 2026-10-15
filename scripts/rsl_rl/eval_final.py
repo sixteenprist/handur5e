@@ -7,11 +7,11 @@
 
 用途
 ----
-加载训练权重（如自动课程清跑产物 ``best/grasp_v49_newgeom_autofinal.pt``），
+加载训练权重（当前主交付 ``best/grasp_v58_delayrobust.pt``；v57 为无延迟对照），
 在**最终部署配置**下跑 N 集确定性 rollout（策略取均值、无探索噪声），统计：
 
   - 成功率      : 提起净高度 ≥ 8cm 的集数占比（8cm 与 ``lift_success_reward`` 一致）
-  - 提起高度    : 成功集的最大净提升（cm）
+  - 提起高度    : 成功集净提升 mean/min（cm）
   - 抓取瞬间力  : 首次跨过 8cm 那一步的 拇指力 / 四指最大力（N）
   - 抓取瞬间漂移: 同一时刻的 cube 水平位移（cm）——"抓取有没有把 cube 推跑"
   - 全程漂移    : 整集 cube 水平位移最大值（cm，含提起后保持期）
@@ -29,7 +29,7 @@ curriculum 关闭、远起 scale=1.0、预备位/预闭合=0、门控链终值�
         --checkpoint logs/rsl_rl/ur5e_grasp_v5/best/grasp_v49_newgeom_autofinal.pt \
         --num_envs 100 --steps 300
 
-参考验收线（2026-09-30，v49 新几何"从上往下"清跑产物）
+参考验收线（2026-09-30 历史记录，v49；当前主交付口径见 DEPLOY_INTERFACE.md §7/§9）
 --------------------------------------------------------
     成功率 100/100；提起 mean 10.6cm / min 9.8cm；
     抓取瞬间 拇 0.65N / 四指max 0.26N；抓取瞬间漂移 0.0cm；
@@ -43,7 +43,7 @@ parser = argparse.ArgumentParser(description="最终策略验收评测（N 集�
 parser.add_argument("--task", type=str, default="Template-Ur5e-Drillgrasp-v0", help="任务名")
 parser.add_argument("--checkpoint", type=str, required=True, help="权重文件路径（.pt）")
 parser.add_argument("--num_envs", type=int, default=100, help="评测环境数 = 集数（默认 100）")
-parser.add_argument("--steps", type=int, default=300, help="每集步数（默认 300 ≈ 5s）")
+parser.add_argument("--steps", type=int, default=300, help="每集步数（默认 300 ≈ 10s@30Hz）")
 args_cli = parser.parse_args()
 
 from isaaclab.app import AppLauncher  # noqa: E402

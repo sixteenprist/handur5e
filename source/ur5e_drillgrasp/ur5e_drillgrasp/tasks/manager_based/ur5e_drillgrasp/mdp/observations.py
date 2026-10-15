@@ -13,7 +13,7 @@ MDP 观测函数。
 from __future__ import annotations
 
 import torch
-from isaaclab.assets import Articulation, RigidObject
+from isaaclab.assets import Articulation  # [归档 2026-10-15] RigidObject 未使用已移除
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.utils.math import quat_apply
 

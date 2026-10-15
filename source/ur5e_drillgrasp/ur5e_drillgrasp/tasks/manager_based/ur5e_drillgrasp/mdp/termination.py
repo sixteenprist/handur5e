@@ -25,22 +25,23 @@ def drill_dropped(env: ManagerBasedRLEnv) -> torch.Tensor:
     return obj.data.root_pos_w[:, 2] < 0.0
 
 
-def cube_launched(
-    env: ManagerBasedRLEnv,
-    lin_vel_thresh: float = 1.0,
-    ang_vel_thresh: float = 5.0,
-) -> torch.Tensor:
-    """[2026-09-19 干预7 异常隔离] Cube 被撞飞（速度过大）→ 终止该 episode。
+# # ===== [归档 2026-10-15] cube_launched(): 全仓 0 引用,整段注释留档（恢复=去掉行首'# '）=====
+# def cube_launched(
+#     env: ManagerBasedRLEnv,
+#     lin_vel_thresh: float = 1.0,
+#     ang_vel_thresh: float = 5.0,
+# ) -> torch.Tensor:
+#     """[2026-09-19 干预7 异常隔离] Cube 被撞飞（速度过大）→ 终止该 episode。
 
-    背景：接触探索期偶发"少数 env 把 cube 撞飞/弹动"，产生极端 return 样本 →
-    value 尖峰（1.4~13.8）→ 一次 update 撕裂策略（766/1008/1279 均为此模式）。
-    正常抓取/悬停时 cube 速度 <0.2 m/s；1.0 m/s 只在"被撞飞"时触发。
-    截断这些 rollout：极端 return 不进入 GAE，value 不会被拉偏。
-    """
-    obj: RigidObject = env.scene["cube_obj"]
-    v = torch.norm(obj.data.root_lin_vel_w, dim=-1)
-    w = torch.norm(obj.data.root_ang_vel_w, dim=-1)
-    return (v > lin_vel_thresh) | (w > ang_vel_thresh)
+#     背景：接触探索期偶发"少数 env 把 cube 撞飞/弹动"，产生极端 return 样本 →
+#     value 尖峰（1.4~13.8）→ 一次 update 撕裂策略（766/1008/1279 均为此模式）。
+#     正常抓取/悬停时 cube 速度 <0.2 m/s；1.0 m/s 只在"被撞飞"时触发。
+#     截断这些 rollout：极端 return 不进入 GAE，value 不会被拉偏。
+#     """
+#     obj: RigidObject = env.scene["cube_obj"]
+#     v = torch.norm(obj.data.root_lin_vel_w, dim=-1)
+#     w = torch.norm(obj.data.root_ang_vel_w, dim=-1)
+#     return (v > lin_vel_thresh) | (w > ang_vel_thresh)
 
 
 def fingertip_force_overload(

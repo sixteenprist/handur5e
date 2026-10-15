@@ -1,1 +1,1 @@
-from .drill import DRILL_CFG
+# [归档 2026-10-15] DRILL_CFG 再导出未使用：from .drill import DRILL_CFG

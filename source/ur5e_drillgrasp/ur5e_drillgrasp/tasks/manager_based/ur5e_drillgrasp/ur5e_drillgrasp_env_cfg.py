@@ -6,7 +6,7 @@
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.controllers import DifferentialIKControllerCfg, OperationalSpaceControllerCfg
+from isaaclab.controllers import OperationalSpaceControllerCfg  # [归档 2026-10-15] DifferentialIKControllerCfg 未使用
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -19,7 +19,7 @@ from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMater
 from isaaclab.utils import configclass
 
 from ur5e_drillgrasp.assets.robots.drill_ur5e import DRILL_UR5E_CFG
-from ur5e_drillgrasp.assets.objects import DRILL_CFG
+# [归档 2026-10-15] DRILL_CFG 未使用（仅下方注释示例）：from ur5e_drillgrasp.assets.objects import DRILL_CFG
 from isaaclab.managers import CommandTermCfg as CmdTerm
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.sensors import ContactSensorCfg
@@ -395,21 +395,24 @@ class EventCfg:
     )
     # [2026-09-19 任务简化] cube 的 xy/旋转锁定已移至 spawn 阶段（LockedCuboidCfg）——
     #   实测 startup EventTerm 改 USD 属性不生效（PhysX 已解析），必须 spawn 时写属性。
-    cache_tcp_orientation = EventTerm(
-        func=mdp.cache_tcp_orientation_on_reset,
-        mode="reset",
-        params={},
-    )
-    reset_tcp_close_bonus = EventTerm(
-        func=mdp.reset_tcp_close_granted,
-        mode="reset",
-        params={},
-    )
-    reset_goal_bonus = EventTerm(
-        func=mdp.reset_goal_bonus_granted,
-        mode="reset",
-        params={},
-    )
+# ===== [归档 2026-10-15] cache_tcp_orientation 空转（消费者奖励已死）=====
+#     cache_tcp_orientation = EventTerm(
+#         func=mdp.cache_tcp_orientation_on_reset,
+#         mode="reset",
+#         params={},
+#     )
+# ===== [归档 2026-10-15] reset_tcp_close_bonus 空转（消费者奖励已死）=====
+#     reset_tcp_close_bonus = EventTerm(
+#         func=mdp.reset_tcp_close_granted,
+#         mode="reset",
+#         params={},
+#     )
+# ===== [归档 2026-10-15] reset_goal_bonus 空转（消费者奖励已死）=====
+#     reset_goal_bonus = EventTerm(
+#         func=mdp.reset_goal_bonus_granted,
+#         mode="reset",
+#         params={},
+#     )
 
     # ===== 【泛化阶段启用】Cube 位置随机化（当前固定位置，先注释）=====
     # 注：Cube 边长 5cm，±3cm 总范围约 1.2 倍边长，够让策略依赖 cube_pos 自适应
@@ -795,8 +798,9 @@ class CurriculumCfg:
             "pause_below": 0.35,
         },
     )
-    # [消融收口] 四项"学会后渐退到 0"（早期脚手架保留、末态简化）：
-    #   ①tcp_reach 1.5→0 ②thumb_face_reach 3→0 ③finger_close 1→0 ④fingertip_press −0.2→0
+    # [消融收口·2026-10-15 校正] 实际挂退火到 0 的只有两项：tcp_reach 1.5→0（anneal_tcp_reach 见下）
+    #   与 tip_progress→0（anneal_tip_progress）。thumb_face_reach 3.0 / finger_close 1.0 /
+    #   fingertip_press −0.2 三项**恒权重**（消融实验证明可归零，当前未挂退火）。
     anneal_lift_four = CurrTerm(
         func=mdp.curriculum_lift_four_anneal,
         params={
@@ -898,6 +902,17 @@ def apply_final_deploy_overrides(cfg) -> None:
       curriculum 关闭 + 远起 1.0 + 预备位/预闭合 0 + 门控链终值 + t2 自由。
     """
     cfg.curriculum = None
+    # [2026-10-14 ③ DR] cube 位姿随机化开关（环境变量 CUBE_POSE_RANGE=半幅 m，默认 0=关）。
+    #   微调训练与鲁棒性评测共用同一开关；不设置时行为与之前完全一致。
+    import os as _os
+
+    _pose_r = float(_os.environ.get("CUBE_POSE_RANGE", "0.0"))
+    if _pose_r > 0.0:
+        cfg.events.reset_cube.params["pose_range"] = {
+            "x": (-_pose_r, _pose_r),
+            "y": (-_pose_r, _pose_r),
+        }
+        print(f"[INFO] CUBE_POSE_RANGE={_pose_r}: cube 位置随机化 x/y ±{_pose_r}m/集")
     cfg.events.reset_arm_prepose.params["pose_scale"] = 0.0
     cfg.events.reset_arm_far.params["scale"] = 1.0
     cfg.actions.hand_action.frozen_channels = ()
@@ -926,7 +941,7 @@ def apply_final_deploy_overrides(cfg) -> None:
     #   已回退——机制保留在 rewards.LIFT_FOUR["touch"]（默认 0=关），待换"软奖励"路线再试。
 
     # [消融 A/B 开关] 环境变量 ABLATE="tcp_reach,fingertip_press" → 对应奖励权重归 0（只影响本次进程）
-    import os as _os
+    # [归档 2026-10-15] 重复导入（上方 DR 块已导入）：import os as _os
 
     for _t in _os.environ.get("ABLATE", "").split(","):
         _t = _t.strip()
