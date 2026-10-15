@@ -22,7 +22,7 @@
 
 用法（项目根目录）
 ------------------
-    # 全套矩阵（baseline + 12 条件 = 13 场景）：
+    # 全套矩阵（baseline + 16 条件 = 17 场景；含动作延迟）：
     python scripts/rsl_rl/eval_deploy.py \
         --checkpoint logs/rsl_rl/ur5e_grasp_v5/best/grasp_v58_delayrobust.pt \
         --num_envs 100 --steps 300 --scenario all
@@ -52,6 +52,7 @@ parser.add_argument("--steps", type=int, default=300, help="每集步数（默�
 parser.add_argument("--scenario", type=str, default="all", help="all / baseline / 单项名 / custom")
 parser.add_argument("--beta", type=float, default=None, help="动作低通系数（1.0=不过滤；越小越平滑）")
 parser.add_argument("--delay", type=int, default=0, help="观测延迟步数（0=无延迟）")
+parser.add_argument("--act-delay", type=int, default=0, help="动作延迟步数（命令晚 N 步生效；0=无）")
 parser.add_argument("--rate-arm", type=float, default=None, help="手臂 raw 步间变化上限（None=不限制）")
 parser.add_argument("--noise-pos", type=float, default=0.0, help="关节位置观测噪声 σ（rad）")
 parser.add_argument("--noise-vel", type=float, default=0.0, help="关节速度观测噪声 σ（rad/s）")
@@ -97,6 +98,11 @@ SCENARIOS = {
     "rate_arm2.0": {"rate_arm": 2.0},
     "filter_b0.5_d1": {"beta": 0.5, "delay": 1},
     "combo_b0.5_d2_noise": {"beta": 0.5, "delay": 2, "noise_pos": 0.002, "noise_vel": 0.01},
+    # [2026-10-15 补测] 动作延迟（命令晚 N 步才生效；真机传输+执行器滞后的另一半）
+    "act_d1": {"act_delay": 1},
+    "act_d2": {"act_delay": 2},
+    "act_d1_b0.5": {"act_delay": 1, "beta": 0.5},
+    "act_d1_obs_d1": {"act_delay": 1, "delay": 1},
 }
 
 
@@ -111,11 +117,14 @@ class DeployShim:
         rate_arm=None,
         noise_pos=0.0,
         noise_vel=0.0,
+        act_delay=0,
     ):
         self.policy = policy
         self.beta = beta
         self.delay = int(delay)
         self.rate_arm = rate_arm
+        self.act_delay = int(act_delay)
+        self._act_buf = []
         self.noise_pos = float(noise_pos)
         self.noise_vel = float(noise_vel)
         self._hist = None
@@ -124,6 +133,7 @@ class DeployShim:
     def reset(self):
         """episode 开始时清空延迟缓冲与滤波状态（模拟真机重启后无历史）。"""
         self._hist = collections.deque(maxlen=self.delay + 1) if self.delay > 0 else None
+        self._act_buf = []
         self._prev = None
 
     def __call__(self, obs):
@@ -166,6 +176,14 @@ class DeployShim:
             a = a.clone()
             d = (a[:, :6] - self._prev[:, :6]).clamp(-self.rate_arm, self.rate_arm)
             a[:, :6] = self._prev[:, :6] + d
+
+        # 5) 动作延迟：命令晚 act_delay 步才生效（真机链路顺序：滤波→限幅→传输/执行器滞后）
+        if self.act_delay > 0:
+            self._act_buf.append(a.detach().clone())
+            if len(self._act_buf) <= self.act_delay:
+                a = torch.zeros_like(a)          # warmup=空命令（与训练 wrapper 的重置填充一致）
+            else:
+                a = self._act_buf.pop(0)
 
         self._prev = a.detach().clone()
         return a
@@ -245,6 +263,7 @@ def main():
                     "rate_arm": args_cli.rate_arm,
                     "noise_pos": args_cli.noise_pos,
                     "noise_vel": args_cli.noise_vel,
+                    "act_delay": args_cli.act_delay,
                 },
             )
         ]
