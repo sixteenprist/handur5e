@@ -3,7 +3,7 @@
 用法: python scripts/analysis/make_paper_figures.py
 输出: docs/figures/*.png (300dpi) + docs/figures/DATA_SOURCES.md
 """
-import glob, os
+import glob, os, re
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -37,6 +37,24 @@ def tb_curve(run_dirs, tag):
             d[s.step] = s.value
     xs = sorted(d)
     return np.array(xs), np.array([d[x] for x in xs])
+
+
+def smooth(x, y, k=100):
+    if len(y) < k:
+        return x, y
+    return x[k-1:], np.convolve(y, np.ones(k) / k, mode="valid")
+
+def ablation_curves():
+    t = open(os.path.join(ROOT, "logs/train_ablate_nocurr.log"), encoding="utf-8", errors="ignore").read()
+    pat = re.compile(r"Learning iteration (\d+)/21790.*?(?=Learning iteration |\Z)", re.S)
+    xs, ls, el = [], [], []
+    for m in pat.finditer(t):
+        seg = m.group(0)
+        mm = re.search(r"Episode_Reward/lift_success: ([\d\.]+)", seg)
+        me = re.search(r"Mean episode length: ([\d\.]+)", seg)
+        if mm and me:
+            xs.append(int(m.group(1))); ls.append(float(mm.group(1))); el.append(float(me.group(1)))
+    return np.array(xs), np.array(ls), np.array(el)
 
 # ─────────────────────────────────────────────────────────────────────────
 # Fig 1. 延迟-成功率（v57 vs v58）+ 动作延迟
@@ -235,22 +253,35 @@ ax.set_xlim(0, 9.6); ax.set_ylim(0.1, 3.5)
 save(fig, "fig9_curriculum_chain.png")
 
 # ─────────────────────────────────────────────────────────────────────────
-# Fig 10. 无课程消融（当前进度，写作时快照）
+# Fig 10. 课程消融：自动课程 vs 无课程（同预算 21790）
+#   数据: TB 2026-10-18_11-42-10（无课程，已完成）；runs57（自动课程）
+#   不稳定事件（虚线）：~13k / ~19k / ~21.77k 末段
 # ─────────────────────────────────────────────────────────────────────────
-rd = "2026-10-18_11-42-10"
-xs, ys = tb_curve([rd], "Train/mean_reward")
-xl, yl = tb_curve([rd], "Train/mean_episode_length")
-if len(xs) > 0:
-    fig, axes = plt.subplots(1, 2, figsize=(9, 3.2))
-    axes[0].plot(xs, ys, lw=1.0, color="#b35b2f")
-    axes[0].set_xlabel("Iteration"); axes[0].set_ylabel("Mean reward")
-    axes[0].set_title(f"No-curriculum from scratch (snapshot: iter {xs[-1]}/21790)")
-    axes[1].plot(xl, yl, lw=1.0, color="#b35b2f")
-    axes[1].set_xlabel("Iteration"); axes[1].set_ylabel("Mean episode length (steps)")
-    axes[1].set_title("Episode length")
-    fig.tight_layout(); save(fig, "fig10_no_curriculum_snapshot.png")
+xs_a, ls_a, el_a = ablation_curves()
+ls_v57_x, ls_v57_y = tb_curve(runs57, "Episode_Reward/lift_success")
+el_v57_x, el_v57_y = tb_curve(runs57, "Train/mean_episode_length")
+if len(xs_a) > 0:
+    fig, axes = plt.subplots(1, 2, figsize=(11, 3.8))
+    x1, y1 = smooth(ls_v57_x, ls_v57_y)
+    x2, y2 = smooth(xs_a, ls_a)
+    axes[0].plot(x1, y1, lw=1.1, color="#2f6db3", label="v57 (auto curriculum)")
+    axes[0].plot(x2, y2, lw=1.1, color="#b35b2f", label="no curriculum (ablation)")
+    for ev in (13000, 19300, 20100, 21770):
+        axes[0].axvline(ev, color="gray", ls=":", lw=0.8)
+    axes[0].set_xlabel("Iteration"); axes[0].set_ylabel("lift_success term (100-iter smooth)")
+    axes[0].set_title("(a) Comparable success term"); axes[0].legend(fontsize=7)
+    x3, y3 = smooth(el_v57_x, el_v57_y)
+    x4, y4 = smooth(xs_a, el_a)
+    axes[1].plot(x3, y3, lw=1.1, color="#2f6db3")
+    axes[1].plot(x4, y4, lw=1.1, color="#b35b2f")
+    for ev in (13000, 19300, 20100, 21770):
+        axes[1].axvline(ev, color="gray", ls=":", lw=0.8)
+    axes[1].set_xlabel("Iteration"); axes[1].set_ylabel("Mean episode length (steps, smooth)")
+    axes[1].set_title("(b) Episode length (dotted: instability events)")
+    fig.tight_layout(); save(fig, "fig10_no_curriculum_vs_curriculum.png")
+    print("  NOTE: ablation curves parsed from text log; v57 from stitched TB; smoothing=100")
 else:
-    print("fig10: 无可用数据(训练刚启动)")
+    print("fig10: 无可用数据")
 
 # ─────────────────────────────────────────────────────────────────────────
 # Fig 11. 延迟语义时序图(示意, D_obs=D_act=1)
@@ -291,7 +322,7 @@ with open(os.path.join(OUT, "DATA_SOURCES.md"), "w", encoding="utf-8") as f:
 | fig7 动作空间迭代 | CHECKPOINTS ⑨⑩⑪（v49/v52/v53 验收表；训练预算不同，不可作严格同预算对比） |
 | fig8 四指贴面 | 2026-10-13 验收探测记录（四尖盒距） |
 | fig9 课程链 | env_cfg.CurriculumCfg 的 after_term 关系 |
-| fig10 无课程消融 | TB：2026-10-18_11-42-10（写作时快照；最终结果待训练完成） |
+| fig10 课程消融对比 | 无课程=logs/train_ablate_nocurr.log(文本解析,全 21790);自动课程=TB 拼接 runs57;100 迭代平滑;虚线=不稳定事件(约 13k/19.3k/20.1k/21.77k) |
 | fig11 延迟时序 | 机制示意（无数据；对应 §4.2 语义） |
 """)
 print("DATA_SOURCES.md 已生成")
