@@ -950,6 +950,36 @@ def apply_final_deploy_overrides(cfg) -> None:
     cfg.rewards.cube_drift.weight = -1.5
 
 
+def _apply_object_shape_cfg(cfg) -> None:
+    """[Phase 1 形状抽象] 物体形状由环境变量设定：OBJECT_KIND=box|sphere、OBJECT_SIZE=半边长/半径(m)。
+
+    - box（默认）：spawn/初始高度/一切公式与改造前完全一致（逐位不变）；
+    - sphere：替换 spawn 为球（半径=size、质量 0.05kg），球心高度=台面 0.75 + size；
+      观测/奖励经 mdp/object_geometry.py 自动走球面公式。
+    """
+    import os as _os
+    from .mdp import object_geometry as _geo
+
+    kind = (_os.environ.get("OBJECT_KIND", "box") or "box").strip().lower()
+    size = float(_os.environ.get("OBJECT_SIZE", "0.03"))
+    _geo.configure(kind, size)
+    if kind == "sphere":
+        cfg.scene.cube_obj.spawn = sim_utils.SphereCfg(
+            radius=size,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                solver_position_iteration_count=16,
+                solver_velocity_iteration_count=0,
+                linear_damping=0.1,
+                angular_damping=0.1,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.2, 0.5, 0.8)),
+        )
+        cfg.scene.cube_obj.init_state.pos = (-0.14, 0.18, 0.75 + size)
+    print(f"[INFO] 物体形状: OBJECT_KIND={kind}, OBJECT_SIZE={size}m", flush=True)
+
+
 @configclass
 class Ur5eDrillgraspEnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
@@ -999,4 +1029,6 @@ class Ur5eDrillgraspEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.eye = (8.0, 0.0, 5.0)
         # simulation settings
         self.sim.dt = 1 / 240
+        # [Phase 1] 物体形状（box/sphere）由环境变量设定；box 默认行为不变
+        _apply_object_shape_cfg(self)
         self.sim.render_interval = self.decimation

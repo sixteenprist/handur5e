@@ -392,6 +392,27 @@ v58 源每 100（26 个）、DR 25650、消融 21770/21789、奖励消融评测�
 - 结果：checkpoint 472 保留 / 6268 删除；日志 12 保留 / 21 删除；
 - `logs/` **32G → 3.5G**（释放约 28.5G）；磁盘余 353G。
 
+## ㉑ 物体形状抽象 Phase 1（2026-10-26）
+
+**目标**：一套代码同时支持 cube 与球（后续柱体），且**不影响 cube**。
+
+**实现**：
+- 新模块 `mdp/object_geometry.py`（`configure/surface_distance/surface_vector/surface_offset`）；
+- 环境变量 `OBJECT_KIND`（box|sphere）、`OBJECT_SIZE`（半边长/半径，默认 0.03）；
+  `Ur5eDrillgraspEnvCfg.__post_init__` 应用（sphere 时替换 spawn 为球、质量 0.05kg）；
+- 接入点：`observations.fingertip_to_cube_surface`、`rewards._tip_cube_box_dist`、`tip_progress`/`surface_proximity`
+  的距离分支、`thumb_face_reach`/`_contact_alignment` 的球分支（对置轴=拇指→参考指尖水平方向）；
+- **box 路径逐字保留**（浮点运算不变）。
+
+**验证（全部通过）**：
+1. 固定种子观测快照：改造前后 **torch.equal=True**（13×4×111 全部逐位一致）；
+2. v58 方块回归 100 集：**100/100**，提 16.7cm，漂移 1.7/2.1cm（与改造前一致）；
+3. 球体冒烟：obs 111 维、无 NaN、球心 z=0.78（=0.75+半径）；
+4. **信息性**：v58 零样本试球 19/20（20 集小样本，仅说明迁移潜力；球并非训练目标）。
+
+**下一步（Phase 2，未做）**：一个权重通吃 cube+球 → 需要"每环境形状 + 物体池"（场景中两种形状、每集激活一个、
+观测/奖励按环境形状取值）；预计 1-2 天代码 + 训练（从头混合或回放微调），验收时同时报 cube/球成功率。
+
 ## 交付与版本索引（按用途排序）
 
 | 用途 | 权重 | 说明 |

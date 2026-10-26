@@ -16,6 +16,7 @@ import torch
 from isaaclab.assets import Articulation  # [归档 2026-10-15] RigidObject 未使用已移除
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.utils.math import quat_apply
+from . import object_geometry as _objgeo  # [Phase 1] 形状抽象（box/sphere）
 
 
 # ══════════════════════════════════════════════════════════════
@@ -166,7 +167,7 @@ def fingertip_to_cube_surface(env: ManagerBasedRLEnv) -> torch.Tensor:
     """
     robot: Articulation = env.scene["robot"]
     cube_pos = env.scene["cube_obj"].data.root_pos_w               # (N, 3)
-    half = _CUBE_HALF_SIZE
+    half = _objgeo.surface_offset()
     vecs = []
     for name in _FINGERTIP_NAMES:
         # v85: body_pos_w→body_link_pos_w（link frame，与 rewards._get_fingertip_pos 一致）

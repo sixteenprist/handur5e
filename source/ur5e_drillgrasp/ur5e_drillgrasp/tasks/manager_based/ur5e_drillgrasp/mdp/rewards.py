@@ -41,6 +41,7 @@ from .observations import (
     _BODY_OFFSET, _CUBE_HALF_SIZE, _FINGERTIP_NAMES, _get_body_id,
     ACTIVE_TIP_NAMES, ACTIVE_FOUR_INDICES,
 )
+from . import object_geometry as _objgeo  # [Phase 1] 形状抽象（box/sphere）
 
 # ── §0 全局开关与常量 ──（课程/末态可渐变；deploy 覆盖会改这些）
 # 缓存每根手指的关节 id（find_joints 较慢，robot 不会变）
@@ -126,6 +127,8 @@ def _tip_cube_box_dist(env: ManagerBasedRLEnv, tip_name: str) -> torch.Tensor:
     """
     p_tip = _get_fingertip_pos(env, tip_name)
     c = _get_cube_pos(env)
+    if not _objgeo.is_box():  # [Phase 1] 球：到球面距离
+        return _objgeo.surface_distance(p_tip, c)
     dvec = (p_tip - c).abs() - _CUBE_HALF_SIZE
     return torch.norm(dvec.clamp(min=0.0), dim=-1)
 
@@ -309,6 +312,18 @@ def _contact_alignment(env: ManagerBasedRLEnv, force_thresh: float = 0.03) -> to
     """(N,) 接触力沿夹持轴（cube 局部 y）的占比（力度加权，0~1）。纯托举(竖直力)→≈0。"""
     from isaaclab.utils.math import quat_apply_inverse
     forces = _fingertip_force_vectors(env)                        # (N,5,3) 世界系
+    if not _objgeo.is_box():
+        # [Phase 1] 球：对置轴 = 拇指尖→参考指尖的水平方向；|f·u| 力度加权占比
+        thumb = _get_fingertip_pos(env, _FINGERTIP_NAMES[0])
+        fingers = _get_fingertip_pos(env, ACTIVE_TIP_NAMES[1])
+        u = fingers - thumb
+        u = torch.stack([u[:, 0], u[:, 1], torch.zeros_like(u[:, 2])], dim=-1)
+        u = u / torch.norm(u, dim=-1, keepdim=True).clamp(min=1e-6)
+        mag = torch.norm(forces, dim=-1)
+        mask = (mag > force_thresh).float()
+        f_u = (forces * u.unsqueeze(1)).sum(dim=-1).abs() * mask
+        den = (mag * mask).sum(dim=-1) + 1e-6
+        return f_u.sum(dim=-1) / den
     cube_quat = env.scene["cube_obj"].data.root_quat_w            # (N,4)
     quat_rep = cube_quat.unsqueeze(1).expand(-1, 5, -1).reshape(-1, 4)
     forces_local = quat_apply_inverse(quat_rep, forces.reshape(-1, 3)).reshape(forces.shape)
@@ -450,7 +465,7 @@ def tip_progress_reward(
         if metric == "box":
             d = d + _tip_cube_box_dist(env, n)
         else:
-            d = d + (torch.norm(_get_fingertip_pos(env, n) - cube, dim=-1) - _CUBE_HALF_SIZE)
+            d = d + _objgeo.surface_distance(_get_fingertip_pos(env, n), cube)
     if not hasattr(env, "_tip_d_prev") or env._tip_d_prev.shape[0] != d.shape[0]:
         env._tip_d_prev = d.clone()
     if hasattr(env, "episode_length_buf") and env.episode_length_buf is not None:
@@ -572,7 +587,7 @@ def surface_proximity_reward(
         if metric == "box":
             d = _tip_cube_box_dist(env, n)
         else:
-            d = torch.norm(_get_fingertip_pos(env, n) - cube, dim=-1) - _CUBE_HALF_SIZE
+            d = _objgeo.surface_distance(_get_fingertip_pos(env, n), cube)
         if kernel == "tanh":
             # [v10 A] 长尾核（IsaacLab Lift 同款）：1−tanh(d/σ)，任意距离都有梯度，无截断死区
             per.append(1.0 - torch.tanh(d / sigma))
@@ -649,6 +664,17 @@ def thumb_face_reach_reward(
     #   历史注释写"中指"是五指化 2026-09-14 之前的语义）。
     fingers = _get_fingertip_pos(env, finger_name or ACTIVE_TIP_NAMES[1])  # (N,3) 工作对指尖
     thumb = _get_fingertip_pos(env, _FINGERTIP_NAMES[0])        # (N,3) 拇指尖
+    if not _objgeo.is_box():
+        # [Phase 1] 球：对置轴取"中心→参考指尖"的水平方向；目标=对侧表面点
+        u = fingers - cube
+        u = torch.stack([u[:, 0], u[:, 1], torch.zeros_like(u[:, 2])], dim=-1)
+        u = u / torch.norm(u, dim=-1, keepdim=True).clamp(min=1e-6)
+        target = cube - _objgeo.size() * u
+        d = torch.norm(thumb - target, dim=-1)
+        reach = 1.0 - torch.tanh(d / sigma)
+        d_tcp = _tcp_cube_dist(env)
+        gate = 1.0 - torch.tanh(d_tcp / gate_std)
+        return gate * reach
     v_f = quat_apply_inverse(cube_quat, fingers - cube)         # (N,3) 参考指尖（五指化后=食指，见上）
     v_t = quat_apply_inverse(cube_quat, thumb - cube)           # (N,3) 拇指（cube 局部系）
     s_four = _fingers_side_hysteresis(env, v_f[:, 1])           # (N,) 四指侧（±1，带滞回防跳变）

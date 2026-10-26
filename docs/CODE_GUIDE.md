@@ -38,6 +38,7 @@ ur5e_drillgrasp/
 │           ├── curriculum.py           # 自动课程（信号 EMA + 10 个课程函数）
 │           ├── events.py               # 每集重置逻辑（关节/远起/预备位）
 │           ├── termination.py          # 终止条件
+│           ├── object_geometry.py      # 形状抽象层（box/sphere；Phase 1）
 │           ├── delay.py                # 延迟鲁棒化包装器（训练用）
 │           └── commands/drill_pose_command.py  # 目标位姿命令（当前 config 挂载但观测未用）
 ├── scripts/rsl_rl/                     # train / play / eval_final / eval_deploy / cli_args
@@ -247,6 +248,22 @@ TerminationManager：是否终止/超时（§9）
    - `INDEP_MIX0=<alpha>`：模块导入时设定四指独立性 α 的初值（续训保值，不置则从 0 起）。
 
 **为什么必须用**：直接用原始 cfg 推理会出现"观测/动作/起点分布错配"，成功率骤降（历史实测）。`play.py / eval_final.py / eval_deploy.py` 都通过 `--final` 或直接调用本函数来保证一致。
+
+### 3.12 物体形状抽象（Phase 1：box / sphere）
+
+`mdp/object_geometry.py` 把"写死的立方体几何"集中为可替换接口，用**环境变量**设定（进程级）：
+
+| 变量 | 取值 | 说明 |
+|---|---|---|
+| `OBJECT_KIND` | `box`（默认）/`sphere` | 物体形状 |
+| `OBJECT_SIZE` | 0.03（默认） | box=半边长；sphere=半径（m） |
+
+- **box（默认）**：spawn、初始高度与全部公式**逐位不变**（已用固定种子观测快照 + v58 100 集验收验证）；
+- **sphere**：`SceneCfg` 的 spawn 换成球（质量 0.05kg），球心高度 = 0.75 + 半径；观测/奖励经
+  `object_geometry.surface_distance/surface_vector` 自动走球面公式；`thumb_face_reach` 与
+  `contact_alignment` 的对置轴改为"拇指→参考指尖"的水平方向（方块仍用 cube 局部 ±y）；
+- **限制**：当前一次进程只支持一种形状（便于分别训练/评测）。"一个权重同时抓多种形状"
+  需要"每环境形状 + 物体池"机制（Phase 2，尚未实现）。
 
 ### 3.11 EnvCfg 与任务注册
 
@@ -625,6 +642,7 @@ train.py
 | CUBE_POSE_RANGE | 评测/训练时 cube 位置随机化半幅（m） |
 | DELAY_OBS_MAX / DELAY_ACT_MAX | 训练时观测/动作最大延迟步数 |
 | ABLATE | 消融开关（逗号分隔的奖励项名 → 权重置 0） |
+| OBJECT_KIND / OBJECT_SIZE | 物体形状与尺寸（Phase 1：box/sphere，进程级） |
 
 ---
 
