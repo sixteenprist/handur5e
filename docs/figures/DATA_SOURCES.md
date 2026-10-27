@@ -13,3 +13,4 @@
 | fig9 课程链 | env_cfg.CurriculumCfg 的 after_term 关系 |
 | fig10 课程消融对比 | 无课程=logs/train_ablate_nocurr.log(文本解析,全 21790);自动课程=TB 拼接 runs57;100 迭代平滑;虚线=不稳定事件(约 13k/19.3k/20.1k/21.77k) |
 | fig11 延迟时序 | 机制示意（无数据；对应 §4.2 语义） |
+| fig12 球体扩展 | logs/ball_evals.log（200 集/项）；cube 数值取自 v58 验收表 |

@@ -307,6 +307,31 @@ ax.text(x0, 3.35, "Delay semantics during training (per-episode sampling; D_obs 
 ax.set_xlim(0, 10.4); ax.set_ylim(0.5, 3.6)
 save(fig, "fig11_delay_timing.png")
 
+# ─────────────────────────────────────────────────────────────────────────
+# Fig 12. 球体扩展（同一套代码）：v58 零样本 vs 球专用（200 集/项）
+#   来源: logs/ball_evals.log；cube 数值取自 v58 验收表。
+# ─────────────────────────────────────────────────────────────────────────
+labels = ["v58 on cube", "v58 zero-shot\nsphere", "sphere\nspecialist"]
+succ = [100.0, 99.5, 100.0]
+lift = [16.7, 17.4, 10.7]
+drift = [1.7, 3.6, 0.9]
+fig, axes = plt.subplots(1, 2, figsize=(9.6, 3.6))
+x = np.arange(len(labels)); w = 0.5
+axes[0].bar(x, succ, w, color=["#2f6db3", "#6aa6e0", "#b35b2f"])
+axes[0].set_ylim(90, 101.5); axes[0].set_xticks(x, labels, fontsize=8)
+axes[0].set_ylabel("Success rate (%)"); axes[0].set_title("(a) 200-episode success")
+for i, v in enumerate(succ):
+    axes[0].text(i, v + 0.15, f"{v:.1f}", ha="center", fontsize=8)
+axes[1].bar(x - 0.18, lift, 0.34, color="#2f6db3", label="lift (cm)")
+axes[1].bar(x + 0.18, drift, 0.34, color="#b35b2f", label="drift mean (cm)")
+axes[1].set_xticks(x, labels, fontsize=8); axes[1].legend(fontsize=8)
+axes[1].set_title("(b) Lift and drift")
+for i, v in enumerate(lift):
+    axes[1].text(i - 0.18, v + 0.25, f"{v:.1f}", ha="center", fontsize=8)
+for i, v in enumerate(drift):
+    axes[1].text(i + 0.18, v + 0.25, f"{v:.1f}", ha="center", fontsize=8)
+fig.tight_layout(); save(fig, "fig12_sphere_extension.png")
+
 # ── 数据来源清单 ──
 with open(os.path.join(OUT, "DATA_SOURCES.md"), "w", encoding="utf-8") as f:
     f.write("""# 图表数据来源（2026-10-18）
@@ -324,5 +349,6 @@ with open(os.path.join(OUT, "DATA_SOURCES.md"), "w", encoding="utf-8") as f:
 | fig9 课程链 | env_cfg.CurriculumCfg 的 after_term 关系 |
 | fig10 课程消融对比 | 无课程=logs/train_ablate_nocurr.log(文本解析,全 21790);自动课程=TB 拼接 runs57;100 迭代平滑;虚线=不稳定事件(约 13k/19.3k/20.1k/21.77k) |
 | fig11 延迟时序 | 机制示意（无数据；对应 §4.2 语义） |
+| fig12 球体扩展 | logs/ball_evals.log（200 集/项）；cube 数值取自 v58 验收表 |
 """)
 print("DATA_SOURCES.md 已生成")
