@@ -257,10 +257,11 @@ v57 从头训练（训练日志 0→21798，验收取 21790 检查点；图 5）
 
 | 权重 | 成功率 | 提起 | 抓取力(拇/四指max) | 全程漂移 |
 |---|---|---|---|---|
-| **球专用（新）** | **200/200 = 100%** | 10.7 cm | 0.91 / 0.58 N | **0.9 / 1.6 cm** |
 | v58 零样本基线 | 199/200 = 99.5% | 17.4 cm | 0.77 / 0.60 N | 3.6 / 4.0 cm |
+| 球专用（初版） | 200/200 = 100% | 10.7 cm | 0.91 / 0.58 N | 0.9 / 1.6 cm |
+| **球专用 + 延迟微调（新）** | **200/200 = 100%** | 15.0 cm | 0.81 / 0.45 N | **1.0 / 1.8 cm** |
 
-两者均远超 85% 的验收线；微调的主要变化不是成功率，而是更保守的动作（更低提起、更小漂移）。该结果说明：将几何假设参数化后，现有策略族对同尺寸球体具有很好的零样本迁移，专用微调可进一步压低漂移。（"一个权重"混合训练尚未进行；球体为仿真内结果，真机需球座/凹槽防滚。）
+三者均远超 85% 的验收线。进一步地，对球专用补做与 v58 相同的延迟随机化微调后，其**部署侧滤波兼容性恢复**：β=0.5 低通下 100% 成功率、保持期手颤 **0.124 rad/s**（微调前 β=0.5 会崩至 23%、无滤波手颤 0.354；微调后无滤波仍 200/200）。该结果说明：将几何假设参数化后，现有策略族对同尺寸球体具有很好的零样本迁移；延迟鲁棒化配方可同样用于新物体，使部署侧滤波（抗颤）可安全上线。（"一个权重"混合训练尚未进行；球体为仿真内结果，真机需球座/凹槽防滚。）
 
 ## 7 讨论与局限
 
@@ -307,4 +308,4 @@ python scripts/rsl_rl/eval_deploy.py --scenario all --num_envs 100 --steps 300
 
 ## 附录 C：图表与数据来源
 
-见 `docs/figures/`(fig1–fig12)与 `docs/figures/DATA_SOURCES.md`；实验表原始日志：`logs/eval_deploy_full2.log`(v57)、`logs/eval_deploy_actdelay.log`(v58)、`logs/delay_evals.log`、`logs/dr_evals.log`、`logs/ball_evals.log`(球体 200 集)、`logs/train_ball_ft.log`(球体微调) 等。
+见 `docs/figures/`(fig1–fig12)与 `docs/figures/DATA_SOURCES.md`；实验表原始日志：`logs/eval_deploy_full2.log`(v57)、`logs/eval_deploy_actdelay.log`(v58)、`logs/delay_evals.log`、`logs/dr_evals.log`、`logs/ball_evals.log`(球体 200 集)、`logs/train_ball_ft.log`(球体微调)、`logs/ball_delay_evals.log`(球体滤波/200 集)、`logs/train_ball_delay.log`(球体延迟微调) 等。

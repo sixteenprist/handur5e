@@ -311,10 +311,10 @@ save(fig, "fig11_delay_timing.png")
 # Fig 12. 球体扩展（同一套代码）：v58 零样本 vs 球专用（200 集/项）
 #   来源: logs/ball_evals.log；cube 数值取自 v58 验收表。
 # ─────────────────────────────────────────────────────────────────────────
-labels = ["v58 on cube", "v58 zero-shot\nsphere", "sphere\nspecialist"]
-succ = [100.0, 99.5, 100.0]
-lift = [16.7, 17.4, 10.7]
-drift = [1.7, 3.6, 0.9]
+labels = ["v58 zero-shot\nsphere", "sphere specialist\n(initial)", "sphere specialist\n(delay-robust)"]
+succ = [99.5, 100.0, 100.0]
+lift = [17.4, 10.7, 15.0]
+drift = [3.6, 0.9, 1.0]
 fig, axes = plt.subplots(1, 2, figsize=(9.6, 3.6))
 x = np.arange(len(labels)); w = 0.5
 axes[0].bar(x, succ, w, color=["#2f6db3", "#6aa6e0", "#b35b2f"])
@@ -349,6 +349,6 @@ with open(os.path.join(OUT, "DATA_SOURCES.md"), "w", encoding="utf-8") as f:
 | fig9 课程链 | env_cfg.CurriculumCfg 的 after_term 关系 |
 | fig10 课程消融对比 | 无课程=logs/train_ablate_nocurr.log(文本解析,全 21790);自动课程=TB 拼接 runs57;100 迭代平滑;虚线=不稳定事件(约 13k/19.3k/20.1k/21.77k) |
 | fig11 延迟时序 | 机制示意（无数据；对应 §4.2 语义） |
-| fig12 球体扩展 | logs/ball_evals.log（200 集/项）；cube 数值取自 v58 验收表 |
+| fig12 球体扩展 | logs/ball_evals.log + logs/ball_delay_evals.log（200 集/项） |
 """)
 print("DATA_SOURCES.md 已生成")
