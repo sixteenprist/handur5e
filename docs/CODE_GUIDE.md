@@ -566,7 +566,7 @@ LIFT_FOUR = {"n": 0.0, "sigma": 0.05, "touch": 0.0, "touch_soft": 0.02}  # 贴�
 | 脚本 | 用途 | 关键点 |
 |---|---|---|
 | `train.py` | 训练 | `--final`（部署分布微调）、`--resume --load_run --checkpoint`、`--max_iterations`（续训时是"再加多少"） |
-| `play.py` | GUI 回放 | 必须 `--final`（否则分布错配）；`--num_envs 16` |
+| `play.py` | GUI 回放 | 必须 `--final`（否则分布错配）；`--num_envs 16`；`--filter-beta 0.5` 可视化部署侧低通 |
 | `eval_final.py` | 100 集确定性验收 | 成功=净提升 ≥8cm；输出提起/漂移/力 |
 | `eval_deploy.py` | 17 场景部署裕度 | 动作低通/速率/观测延迟/动作延迟/噪声/组合；输出成功率/手颤 |
 | `make_paper_figures.py` | 论文图 | 从 TB 拼接 v57 曲线；消融曲线从文本日志解析 |

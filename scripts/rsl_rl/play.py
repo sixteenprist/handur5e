@@ -34,6 +34,7 @@ parser.add_argument(
     help="Use the pre-trained checkpoint from Nucleus.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument("--filter-beta", type=float, default=None, help="[部署侧低通] 动作 EMA β（不传/1.0=无滤波；建议 0.5）。用于可视化部署滤波效果。")
 parser.add_argument(
     "--final",
     action="store_true",
@@ -223,14 +224,25 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     obs = env.get_observations()
     timestep = 0
     # simulate environment
+    _prev_actions = None
     while simulation_app.is_running():
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
             # agent stepping
             actions = policy(obs)
+            # [2026-11-02] 部署侧低通滤波（可选；默认关闭）：a' = β·a + (1−β)·a_prev
+            if args_cli.filter_beta is not None and args_cli.filter_beta < 1.0:
+                if _prev_actions is None or _prev_actions.shape != actions.shape:
+                    _prev_actions = actions.clone()
+                actions = args_cli.filter_beta * actions + (1.0 - args_cli.filter_beta) * _prev_actions
+                _prev_actions = actions.clone()
             # env stepping
             obs, _, dones, _ = env.step(actions)
+            if _prev_actions is not None and dones is not None:
+                done_mask = dones > 0
+                if torch.any(done_mask):
+                    _prev_actions[done_mask] = 0.0
             # reset recurrent states for episodes that have terminated
             if version.parse(installed_version) >= version.parse("4.0.0"):
                 policy.reset(dones)
