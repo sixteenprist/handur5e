@@ -104,6 +104,8 @@ class Ur5eDrillgraspSceneCfg(InteractiveSceneCfg):
     # object = DRILL_CFG.replace(prim_path="{ENV_REGEX_NS}/Object")
 
     # robot
+    # [Phase 2] 对象池：混合形状训练时由 __post_init__ 设为球；否则 None（不 spawn）
+    ball_obj: RigidObjectCfg | None = None
     robot = DRILL_UR5E_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
     # --- 指尖接触传感器（Stage 2 恢复：用户确认新系统传感器有数据）---
@@ -807,7 +809,7 @@ class CurriculumCfg:
             "require_k": 3,
             "gate_min_scale": 0.0,
             "pause_below": 0.35,
-            "after_term": "four_pose_ref",   # [错开] S3 完成后再上贴近门
+            "after_term": "         four_pose_ref",   # [错开] S3 完成后再上贴近门
         },
     )
     anneal_tip_progress = CurrTerm(
@@ -1014,6 +1016,13 @@ class Ur5eDrillgraspEnvCfg(ManagerBasedRLEnvCfg):
 
 
     # Post initialization
+    # [Phase 2] 混合形状对象池（环境变量 OBJECT_POOL / BALL_PROB / BALL_PROB_RAMP_STEPS / BALL_RADIUS / EVAL_SHAPE）
+    object_pool: bool = False
+    ball_prob: float = 0.5
+    ball_prob_ramp_steps: int = 0
+    ball_radius: float = 0.03
+    eval_shape: str = ""
+
     def __post_init__(self) -> None:
         """Post initialization."""
         # general settings
@@ -1032,3 +1041,37 @@ class Ur5eDrillgraspEnvCfg(ManagerBasedRLEnvCfg):
         # [Phase 1] 物体形状（box/sphere）由环境变量设定；box 默认行为不变
         _apply_object_shape_cfg(self)
         self.sim.render_interval = self.decimation
+
+        # [Phase 2] 混合形状对象池：每环境方块+球，每集随机激活一个（见 mdp/object_pool.py）
+        import os as _os
+        self.object_pool = (_os.environ.get("OBJECT_POOL", "0") == "1")
+        self.ball_prob = float(_os.environ.get("BALL_PROB", "0.5"))
+        self.ball_prob_ramp_steps = int(_os.environ.get("BALL_PROB_RAMP_STEPS", "0"))
+        self.ball_radius = float(_os.environ.get("BALL_RADIUS", "0.03"))
+        self.eval_shape = (_os.environ.get("EVAL_SHAPE", "") or "").strip().lower()
+        if self.object_pool:
+            if (_os.environ.get("OBJECT_KIND", "box") or "box").strip().lower() != "box":
+                raise ValueError("OBJECT_POOL=1 时 OBJECT_KIND 必须为 box（形状由对象池管理）")
+            self.scene.ball_obj = RigidObjectCfg(
+                prim_path="{ENV_REGEX_NS}/Ball",
+                spawn=sim_utils.SphereCfg(
+                    radius=self.ball_radius,
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        solver_position_iteration_count=16,
+                        solver_velocity_iteration_count=0,
+                        linear_damping=0.1,
+                        angular_damping=0.1,
+                    ),
+                    mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
+                    collision_props=sim_utils.CollisionPropertiesCfg(),
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.2, 0.5, 0.8)),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.14, 0.18, -50.0)),
+            )
+            self.events.reset_cube.func = mdp.reset_object_pool
+            self.events.reset_cube.params = {}
+            print(
+                f"[INFO] 对象池: BALL_PROB={self.ball_prob}, RAMP={self.ball_prob_ramp_steps}, "
+                f"BALL_RADIUS={self.ball_radius}, EVAL_SHAPE={self.eval_shape or '-'}",
+                flush=True,
+            )

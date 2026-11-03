@@ -11,6 +11,7 @@ debug_explosion 及其工具函数已删除——均未被 TerminationsCfg 启�
 from __future__ import annotations
 
 import torch
+from . import object_pool as _pool  # [Phase 2] 当前物体访问
 from isaaclab.assets import RigidObject
 from isaaclab.envs import ManagerBasedRLEnv
 
@@ -21,8 +22,7 @@ from isaaclab.envs import ManagerBasedRLEnv
 
 def drill_dropped(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) Cube Z < 0.0m 视为掉落。"""
-    obj: RigidObject = env.scene["cube_obj"]
-    return obj.data.root_pos_w[:, 2] < 0.0
+    return _pool.active_pos(env)[:, 2] < 0.0
 
 
 # # ===== [归档 2026-10-15] cube_launched(): 全仓 0 引用,整段注释留档（恢复=去掉行首'# '）=====
@@ -83,8 +83,7 @@ def cube_out_of_bounds(
     策略学提起时，少数 env 的 cube 被顶飞/弹高（z 方向自由、无上限）→ 极端 return 样本。
     正常抓取/提起范围 z∈[0.75, 1.0]（桌面 0.75 + 提起 ≤10cm）；越界即隔离。
     """
-    obj: RigidObject = env.scene["cube_obj"]
-    z = obj.data.root_pos_w[:, 2]
+    z = _pool.active_pos(env)[:, 2]
     return (z > z_max) | (z < z_min)
 
 
@@ -106,8 +105,7 @@ def cube_xy_drift_exceeded(
     （drift 惩罚饱和后仍划算）。本终止让"拖走"直接失败（无回报），逼出稳定捏持。
     参考：每集开始（episode_length_buf<=1）缓存 xy。thresh=4cm。
     """
-    obj: RigidObject = env.scene["cube_obj"]
-    ppos = obj.data.root_pos_w
+    ppos = _pool.active_pos(env)
     if not hasattr(env, "_cube_xy_term_ref") or env._cube_xy_term_ref.shape[0] != ppos.shape[0]:
         env._cube_xy_term_ref = ppos[:, :2].clone()
     if hasattr(env, "episode_length_buf") and env.episode_length_buf is not None:

@@ -167,3 +167,77 @@ def reset_arm_prepose(
         pos[:, i] += pose_scale * float(delta) + (torch.rand(n, device=dev) * 2 - 1) * noise
     vel = asset.data.joint_vel[env_ids].clone()
     asset.write_joint_state_to_sim(pos, vel, env_ids=env_ids)
+
+
+def reset_object_pool(env, env_ids, ball_radius: float | None = None) -> None:
+    """[Phase 2] 每集为每个环境分配激活形状（cube/ball）并摆放两件物体。
+
+    - 形状：``EVAL_SHAPE=cube|ball`` 强制；否则按 ``BALL_PROB`` 采样（``BALL_PROB_RAMP_STEPS`` 可渐进）；
+    - 激活物体放台面默认位（cube：0.75+0.03；ball：0.75+r），另一件放本环境角落的地面；
+    - 两件物体速度清零；形状/尺寸记录在 ``env._obj_is_ball`` / ``env._obj_size``。
+    """
+    from . import object_pool as _pool
+    import os as _os
+
+    dev = env.device
+    n_all = env.num_envs
+    if isinstance(env_ids, slice):
+        ids = torch.arange(n_all, device=dev)[env_ids]
+    else:
+        ids = torch.as_tensor(env_ids, device=dev, dtype=torch.long)
+    n = ids.numel()
+    cfg = env.cfg
+    r = float(ball_radius if ball_radius is not None else getattr(cfg, "ball_radius", 0.03))
+
+    eval_shape = (_os.environ.get("EVAL_SHAPE", "") or "").strip().lower()
+    if eval_shape == "cube":
+        is_ball = torch.zeros(n, dtype=torch.bool, device=dev)
+    elif eval_shape == "ball":
+        is_ball = torch.ones(n, dtype=torch.bool, device=dev)
+    else:
+        p = float(getattr(cfg, "ball_prob", 0.5))
+        ramp = int(getattr(cfg, "ball_prob_ramp_steps", 0))
+        if ramp > 0:
+            step = float(getattr(env, "common_step_counter", 0))
+            p = min(p, step / float(ramp))
+        is_ball = torch.rand(n, device=dev) < p
+
+    if (not hasattr(env, "_obj_is_ball")) or env._obj_is_ball.shape[0] != n_all:
+        env._obj_is_ball = torch.zeros(n_all, dtype=torch.bool, device=dev)
+        env._obj_size = torch.full((n_all,), r, device=dev)
+    env._obj_is_ball[ids] = is_ball
+    env._obj_size[ids] = r
+
+    # 注意：write_root_pose_to_sim 用世界坐标 → 必须叠加每个环境的原点。
+    # 激活物体在环境中间（台面），停用物体在本环境角落的地面（远离机器人与桌子）。
+    origins = env.scene.env_origins[ids]
+    z0 = origins[:, 2]
+    nominal = origins.clone()
+    nominal[:, 0] = nominal[:, 0] + _pool.NOMINAL_XY[0]
+    nominal[:, 1] = nominal[:, 1] + _pool.NOMINAL_XY[1]
+    park = origins.clone()
+    park[:, 0] = park[:, 0] + _pool.PARK_REL_XY[0]
+    park[:, 1] = park[:, 1] + _pool.PARK_REL_XY[1]
+    z_cube = z0 + torch.where(
+        is_ball,
+        torch.full((n,), _pool.PARK_Z_OFF, device=dev),
+        torch.full((n,), _pool.TABLE_Z + _pool.CUBE_HALF, device=dev),
+    )
+    z_ball = z0 + torch.where(
+        is_ball,
+        torch.full((n,), _pool.TABLE_Z + r, device=dev),
+        torch.full((n,), _pool.PARK_Z_OFF, device=dev),
+    )
+    quat = torch.zeros((n, 4), device=dev)
+    quat[:, 0] = 1.0
+    pc = torch.where(is_ball.unsqueeze(1), park, nominal)
+    pc[:, 2] = z_cube
+    pb = torch.where(is_ball.unsqueeze(1), nominal, park)
+    pb[:, 2] = z_ball
+    cube = env.scene["cube_obj"]
+    ball = env.scene["ball_obj"]
+    cube.write_root_pose_to_sim(torch.cat([pc, quat], dim=-1), env_ids=ids)
+    ball.write_root_pose_to_sim(torch.cat([pb, quat], dim=-1), env_ids=ids)
+    v0 = torch.zeros((n, 6), device=dev)
+    cube.write_root_velocity_to_sim(v0, env_ids=ids)
+    ball.write_root_velocity_to_sim(v0, env_ids=ids)

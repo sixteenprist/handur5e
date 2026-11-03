@@ -61,6 +61,7 @@ from rsl_rl.runners import OnPolicyRunner  # noqa: E402
 
 from ur5e_drillgrasp.tasks.manager_based.ur5e_drillgrasp.agents.rsl_rl_ppo_cfg import PPORunnerCfg  # noqa: E402
 from ur5e_drillgrasp.tasks.manager_based.ur5e_drillgrasp.mdp import rewards as R  # noqa: E402
+from ur5e_drillgrasp.tasks.manager_based.ur5e_drillgrasp.mdp import object_pool as P  # noqa: E402, [Phase 2] 当前物体
 from ur5e_drillgrasp.tasks.manager_based.ur5e_drillgrasp.ur5e_drillgrasp_env_cfg import (  # noqa: E402
     apply_final_deploy_overrides,
 )
@@ -83,9 +84,9 @@ def main():
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     uw = env.unwrapped
-    cube = uw.scene["cube_obj"]
     obs, _ = env.reset()
-    cp0 = cube.data.root_pos_w.clone()  # 每集起始 cube 位置（reset_cube 精确复位）
+    # [Phase 2] 读“当前激活物体”（非池模式 = cube_obj，逐位等价）
+    cp0 = P.active_pos(uw).clone()  # 每集起始物体位置（reset 精确复位）
 
     zmax = torch.zeros(N, device=uw.device)  # 净提升最大值
     dmax = torch.zeros(N, device=uw.device)  # 全程 xy 漂移最大值
@@ -98,8 +99,9 @@ def main():
             a = policy(obs)
             obs, _, _, _ = env.step(a)
             fv = torch.norm(R._fingertip_force_vectors(uw), dim=-1)  # (N,5) 指尖力
-            dz = cube.data.root_pos_w[:, 2] - cp0[:, 2]
-            dxy = torch.norm((cube.data.root_pos_w - cp0)[:, :2], dim=-1)
+            ppos = P.active_pos(uw)
+            dz = ppos[:, 2] - cp0[:, 2]
+            dxy = torch.norm((ppos - cp0)[:, :2], dim=-1)
             newly = (zmax < SUCCESS_HEIGHT) & (dz >= SUCCESS_HEIGHT)  # 本步首次达标
             if newly.any():
                 d_at[newly] = dxy[newly]

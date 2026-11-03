@@ -17,6 +17,7 @@ from isaaclab.assets import Articulation  # [归档 2026-10-15] RigidObject 未�
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.utils.math import quat_apply
 from . import object_geometry as _objgeo  # [Phase 1] 形状抽象（box/sphere）
+from . import object_pool as _pool  # [Phase 2] 混合形状对象池
 
 
 # ══════════════════════════════════════════════════════════════
@@ -80,12 +81,12 @@ def _palm_id(env: ManagerBasedRLEnv) -> int:
 
 def object_position(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) Cube 质心位置 → (N, 3)."""
-    return env.scene["cube_obj"].data.root_pos_w
+    return _pool.active_pos(env)
 
 
 def object_orientation(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) Cube 朝向（四元数 wxyz）→ (N, 4)."""
-    return env.scene["cube_obj"].data.root_quat_w
+    return _pool.active_quat(env)
 
 
 def object_lin_vel(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -93,14 +94,14 @@ def object_lin_vel(env: ManagerBasedRLEnv) -> torch.Tensor:
     【critic 特权观测】success_stage1 的"稳定"判定依赖 cube 线速度 (<0.10)，
     但 actor 观测中没有速度项 → 交给 critic 做更准的价值估计。
     """
-    return env.scene["cube_obj"].data.root_lin_vel_w
+    return _pool.active_lin_vel(env)
 
 
 def object_ang_vel(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) Cube 角速度 → (N, 3).
     【critic 特权观测】同上，"稳定"判定还要求角速度 < 0.20。
     """
-    return env.scene["cube_obj"].data.root_ang_vel_w
+    return _pool.active_ang_vel(env)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -147,12 +148,12 @@ def tcp_position(env: ManagerBasedRLEnv) -> torch.Tensor:
 
 def tcp_to_cube(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) TCP → Cube 质心的向量。Stage 1 核心观测。"""
-    return env.scene["cube_obj"].data.root_pos_w - tcp_position(env)  # (N, 3)
+    return _pool.active_pos(env) - tcp_position(env)  # (N, 3)
 
 
 def palm_to_cube(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) 手掌 → Cube 质心的向量。"""
-    return env.scene["cube_obj"].data.root_pos_w - palm_position(env)  # (N, 3)
+    return _pool.active_pos(env) - palm_position(env)  # (N, 3)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -166,17 +167,12 @@ def fingertip_to_cube_surface(env: ManagerBasedRLEnv) -> torch.Tensor:
       兼容）；奖励端聚合才做"拇指组+四指组"两组化（rewards._thumb_four_split）。
     """
     robot: Articulation = env.scene["robot"]
-    cube_pos = env.scene["cube_obj"].data.root_pos_w               # (N, 3)
-    half = _objgeo.surface_offset()
     vecs = []
     for name in _FINGERTIP_NAMES:
         # v85: body_pos_w→body_link_pos_w（link frame，与 rewards._get_fingertip_pos 一致）
         # v94: find_bodies→_get_body_id（缓存）
         tip_pos = robot.data.body_link_pos_w[:, _get_body_id(env, name)]  # (N, 3)
-        to_center = cube_pos - tip_pos                              # (N, 3) 指尖→质心
-        dist = torch.norm(to_center, dim=-1, keepdim=True)          # (N, 1)
-        to_surface = to_center * torch.clamp((dist - half) / (dist + 1e-8), min=0.0)  # (N, 3) 指尖→表面
-        vecs.append(to_surface)
+        vecs.append(_pool.surface_vector(env, tip_pos))             # 指尖→当前物体表面
     return torch.cat(vecs, dim=-1)                                 # (N, 15)
 
 

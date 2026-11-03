@@ -42,6 +42,7 @@ from .observations import (
     ACTIVE_TIP_NAMES, ACTIVE_FOUR_INDICES,
 )
 from . import object_geometry as _objgeo  # [Phase 1] 形状抽象（box/sphere）
+from . import object_pool as _pool  # [Phase 2] 混合形状对象池
 
 # ── §0 全局开关与常量 ──（课程/末态可渐变；deploy 覆盖会改这些）
 # 缓存每根手指的关节 id（find_joints 较慢，robot 不会变）
@@ -95,7 +96,7 @@ def _get_finger_joint_ids(robot: Articulation) -> list[torch.Tensor]:
 
 def _get_cube_pos(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) Cube 质心位置 → (N,3)."""
-    return env.scene["cube_obj"].data.root_pos_w
+    return _pool.active_pos(env)
 
 def _get_tcp_pos(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) TCP 位置 = wrist_3_link_pos(W) + R_wrist3 * body_offset(B)."""
@@ -126,11 +127,7 @@ def _tip_cube_box_dist(env: ManagerBasedRLEnv, tip_name: str) -> torch.Tensor:
       盒面距离在面/棱/角处都精确，与接触物理一致（contact_offset=5mm）。
     """
     p_tip = _get_fingertip_pos(env, tip_name)
-    c = _get_cube_pos(env)
-    if not _objgeo.is_box():  # [Phase 1] 球：到球面距离
-        return _objgeo.surface_distance(p_tip, c)
-    dvec = (p_tip - c).abs() - _CUBE_HALF_SIZE
-    return torch.norm(dvec.clamp(min=0.0), dim=-1)
+    return _pool.surface_distance(env, p_tip)
 
 def _fingertip_cube_center_dists(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(W) 五指尖→Cube 质心的纯欧氏距离 → (N,5)。**不扣**半边长（SoftHand 对齐版，finger_reaching 专用）。
@@ -298,8 +295,7 @@ def _lift_gain(env: ManagerBasedRLEnv, max_height: float) -> torch.Tensor:
 
     z_start 为该 env 当前 episode 的 cube 初始高度（episode_length_buf<=1 时刷新）。
     """
-    obj: RigidObject = env.scene["cube_obj"]
-    z = obj.data.root_pos_w[:, 2]
+    z = _pool.active_pos(env)[:, 2]
     if not hasattr(env, "_cube_z_start") or env._cube_z_start.shape[0] != env.num_envs:
         env._cube_z_start = z.clone()
     if hasattr(env, "episode_length_buf") and env.episode_length_buf is not None:
@@ -312,6 +308,25 @@ def _contact_alignment(env: ManagerBasedRLEnv, force_thresh: float = 0.03) -> to
     """(N,) 接触力沿夹持轴（cube 局部 y）的占比（力度加权，0~1）。纯托举(竖直力)→≈0。"""
     from isaaclab.utils.math import quat_apply_inverse
     forces = _fingertip_force_vectors(env)                        # (N,5,3) 世界系
+    if _pool.enabled(env):
+        from isaaclab.utils.math import quat_apply_inverse
+        is_ball = _pool.is_ball(env)
+        mag = torch.norm(forces, dim=-1)
+        mask = (mag > force_thresh).float()
+        den = (mag * mask).sum(dim=-1) + 1e-6
+        cube_q = env.scene["cube_obj"].data.root_quat_w
+        quat_rep = cube_q.unsqueeze(1).expand(-1, 5, -1).reshape(-1, 4)
+        fl = quat_apply_inverse(quat_rep, forces.reshape(-1, 3)).reshape(forces.shape)
+        f_y = fl[..., 1].abs() * mask
+        box_align = f_y.sum(dim=-1) / den
+        thumb = _get_fingertip_pos(env, _FINGERTIP_NAMES[0])
+        fingers = _get_fingertip_pos(env, ACTIVE_TIP_NAMES[1])
+        u = fingers - thumb
+        u = torch.stack([u[:, 0], u[:, 1], torch.zeros_like(u[:, 2])], dim=-1)
+        u = u / torch.norm(u, dim=-1, keepdim=True).clamp(min=1e-6)
+        f_u = (forces * u.unsqueeze(1)).sum(dim=-1).abs() * mask
+        ball_align = f_u.sum(dim=-1) / den
+        return torch.where(is_ball, ball_align, box_align)
     if not _objgeo.is_box():
         # [Phase 1] 球：对置轴 = 拇指尖→参考指尖的水平方向；|f·u| 力度加权占比
         thumb = _get_fingertip_pos(env, _FINGERTIP_NAMES[0])
@@ -465,7 +480,7 @@ def tip_progress_reward(
         if metric == "box":
             d = d + _tip_cube_box_dist(env, n)
         else:
-            d = d + _objgeo.surface_distance(_get_fingertip_pos(env, n), cube)
+            d = d + _pool.surface_distance(env, _get_fingertip_pos(env, n))
     if not hasattr(env, "_tip_d_prev") or env._tip_d_prev.shape[0] != d.shape[0]:
         env._tip_d_prev = d.clone()
     if hasattr(env, "episode_length_buf") and env.episode_length_buf is not None:
@@ -495,12 +510,13 @@ def palm_cube_rel_pose_penalty(
     """
     from isaaclab.utils.math import quat_inv, quat_mul, quat_apply, quat_error_magnitude
     robot: Articulation = env.scene["robot"]
-    cube: RigidObject = env.scene["cube_obj"]
+    cube_pos = _pool.active_pos(env)
+    cube_quat = _pool.active_quat(env)
     palm_id = _get_body_id(env, "base_link_1")
     p_palm = robot.data.body_link_pos_w[:, palm_id]
     q_palm = robot.data.body_link_quat_w[:, palm_id]
-    q_cube_inv = quat_inv(cube.data.root_quat_w)
-    p_rel = quat_apply(q_cube_inv, p_palm - cube.data.root_pos_w)
+    q_cube_inv = quat_inv(cube_quat)
+    p_rel = quat_apply(q_cube_inv, p_palm - cube_pos)
     q_rel = quat_mul(q_cube_inv, q_palm)
     # [v26 接近阶段] 参考改成"到位才缓存"：TCP 距 cube < arrive_dist 的首次才把当前
     #   相对位姿记为参考；接近途中（未到位）不罚（否则会惩罚接近本身）。
@@ -587,7 +603,7 @@ def surface_proximity_reward(
         if metric == "box":
             d = _tip_cube_box_dist(env, n)
         else:
-            d = _objgeo.surface_distance(_get_fingertip_pos(env, n), cube)
+            d = _pool.surface_distance(env, _get_fingertip_pos(env, n))
         if kernel == "tanh":
             # [v10 A] 长尾核（IsaacLab Lift 同款）：1−tanh(d/σ)，任意距离都有梯度，无截断死区
             per.append(1.0 - torch.tanh(d / sigma))
@@ -655,6 +671,31 @@ def thumb_face_reach_reward(
       - 单指、无 min、无跨指聚合：不会像 close 的 min 那样先补四指；也不会像
         opposition 那样对卷曲反付钱（本项对卷曲只会加钱）。
     """
+    if _pool.enabled(env):
+        from isaaclab.utils.math import quat_apply_inverse
+        is_ball = _pool.is_ball(env)
+        cube_p = env.scene["cube_obj"].data.root_pos_w
+        cube_q = env.scene["cube_obj"].data.root_quat_w
+        ball_p = env.scene["ball_obj"].data.root_pos_w
+        fingers = _get_fingertip_pos(env, finger_name or ACTIVE_TIP_NAMES[1])
+        thumb = _get_fingertip_pos(env, _FINGERTIP_NAMES[0])
+        v_f = quat_apply_inverse(cube_q, fingers - cube_p)
+        v_t = quat_apply_inverse(cube_q, thumb - cube_p)
+        s_four = _fingers_side_hysteresis(env, v_f[:, 1])
+        target = torch.zeros_like(v_t)
+        target[:, 1] = -s_four * _CUBE_HALF_SIZE
+        d_box = torch.norm(v_t - target, dim=-1)
+        reach_box = 1.0 - torch.tanh(d_box / sigma)
+        u = fingers - ball_p
+        u = torch.stack([u[:, 0], u[:, 1], torch.zeros_like(u[:, 2])], dim=-1)
+        u = u / torch.norm(u, dim=-1, keepdim=True).clamp(min=1e-6)
+        tgt_ball = ball_p - _pool.offset(env).unsqueeze(-1) * u
+        d_ball = torch.norm(thumb - tgt_ball, dim=-1)
+        reach_ball = 1.0 - torch.tanh(d_ball / sigma)
+        d_tcp = _tcp_cube_dist(env)
+        gate = 1.0 - torch.tanh(d_tcp / gate_std)
+        return gate * torch.where(is_ball, reach_ball, reach_box)
+
     from isaaclab.utils.math import quat_apply_inverse
     cube = _get_cube_pos(env)                                   # (N,3)
     # [2026-09-16 修复] 本机副本此前漏掉 cube_quat 定义（v_f/v_t 直接引用它 → 一启用就 NameError）；
@@ -847,8 +888,7 @@ def lift_without_grip_penalty(
       本项给负梯度，把"抬升必须靠持续对向力"变成硬约束（与用户要求一致）。
     强度: 满抬(max_height)+零力 → 1.0（×weight）；真夹持(opp≥0.3N) → weak≈0.13 影响可忽略。
     """
-    obj: RigidObject = env.scene["cube_obj"]
-    z = obj.data.root_pos_w[:, 2]
+    z = _pool.active_pos(env)[:, 2]
     if not hasattr(env, "_cube_z_start") or env._cube_z_start.shape[0] != z.shape[0]:
         env._cube_z_start = z.clone()
     if hasattr(env, "episode_length_buf") and env.episode_length_buf is not None:
@@ -873,9 +913,8 @@ def cube_motion_penalty(
       静止≈0；被推滑(5cm/s)→0.76；被转(1rad/s)→0.76。配合捏持链给出"稳"的梯度。
       只罚 xy（z 提起不受影响）。weight≈-0.4。回退：weight=0。
     """
-    obj: RigidObject = env.scene["cube_obj"]
-    v = obj.data.root_lin_vel_w
-    w = obj.data.root_ang_vel_w
+    v = _pool.active_lin_vel(env)
+    w = _pool.active_ang_vel(env)
     vxy = torch.norm(v[:, :2], dim=-1)
     return torch.tanh(vxy / v_std) + torch.tanh(torch.norm(w, dim=-1) / w_std)
 
@@ -890,8 +929,7 @@ def cube_drift_penalty(
     相对每集起点的横向位移：1cm→0.46、2cm→0.76、5cm→0.99。weight≈-0.8。
     回退：weight=0。
     """
-    obj: RigidObject = env.scene["cube_obj"]
-    p = obj.data.root_pos_w
+    p = _pool.active_pos(env)
     if not hasattr(env, "_cube_xy_start2") or env._cube_xy_start2.shape[0] != p.shape[0]:
         env._cube_xy_start2 = p[:, :2].clone()
     if hasattr(env, "episode_length_buf") and env.episode_length_buf is not None:

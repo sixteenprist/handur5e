@@ -1,4 +1,4 @@
-# UR5e 抓取项目 · 检查点与实验索引（更新：2026-10-19）
+# UR5e 抓取项目 · 检查点与实验索引（更新：2026-11-03）
 
 > 本文件是项目的"状态单一入口"：当前交付是什么、每个版本从哪来、战绩如何、如何复现。
 > 历史线（①–⑫）保留溯源；**当前交付与结论见顶部速览、⑬–⑳ 与文末"交付与版本索引"**。
@@ -22,7 +22,9 @@
    → 课程价值 = **训练效率 + 末段稳定性**。
 6. **已知限制**：食指贴近但不出力（0 N）；实机 j4~j3 耦合未对齐；全部结果限于仿真。
 
-### 待办（2026-10-19）
+### 待办（2026-11-03）
+- [ ] **Phase 2「一个权重」**：混合微调进行中（㉕），完成后验收 cube ≥90% / 球 ≥85%（各 200 集）；
+- [ ] 柱体（Phase 3，排队）；
 - [ ] 真机桥：等 ①UR5e 控制方式（RTDE/servoJ）+ 急停 ②手通信协议/频率；
 - [ ] 相机感知：**RealSense D435i** 已定；等安装方式/工作距离 → ArUco 位姿 + 相机→UR 基座标定；
 - [ ] j4–j3 耦合实测表 → 仿真对齐；
@@ -33,7 +35,8 @@
 - ⑩ v50–v52 12 维｜⑪ v53 16 维｜⑫ v55 四指贴近
 - ⑬ v57 从头全自动｜⑭ 已接受状态/失败记录｜⑮ 部署准备（合同/裕度/位姿 DR）
 - ⑯ v58 延迟鲁棒（新主交付）｜⑰ 动作延迟补测+硬件定案｜⑱ 论文草稿+课程消融启动
-- ⑲ 课程消融完成｜⑳ 奖励消融复评+瘦身｜交付与版本索引｜附录：checkpoint 映射
+- ⑲ 课程消融完成｜⑳ 奖励消融复评+瘦身｜㉑ 一套代码｜㉒ 球专用｜㉓ 球延迟鲁棒｜㉔ play 滤波
+- **㉕ Phase 2「一个权重」对象池（进行中）**｜交付与版本索引｜附录：checkpoint 映射
 
 ## 常用命令
 
@@ -465,6 +468,42 @@ v58 源每 100（26 个）、DR 25650、消融 21770/21789、奖励消融评测�
 - **用途**：球专用延迟鲁棒权重 + `--filter-beta 0.5` ≈ 部署配置（β0.5 下 100%、手颤 0.124）。
 - **兼容**：不带参数时与旧 play 完全一致；训练/评测脚本未改。
 - （本次未做正式对比实验；数值依据见 ㉓。）
+
+## ㉕ Phase 2「一个权重」：对象池代码 + 验证（2026-11-03）
+
+**目标**：同一套权重同时会抓方块与球（验收：cube ≥90%、球 ≥85%，各 200 集；v58 保留方块兜底）。
+
+**实现（每环境两件物体，逐集随机激活一件）**：
+- 新 `mdp/object_pool.py`：当前物体访问器（active_pos/quat/lin_vel/ang_vel/surface_distance/surface_vector/is_ball/offset/enabled）；
+  非池模式直接委托 `cube_obj`（逐位等价），池模式按 `env._obj_is_ball` 读激活物体。
+- `mdp/events.py` 新增 `reset_object_pool`：`EVAL_SHAPE` 强制形状，否则按 `BALL_PROB` 采样
+  （`BALL_PROB_RAMP_STEPS` 按策略步 0→p 渐进）；激活物体放台面默认位，另一件停到本环境角落地面；
+  两件速度清零；记录每环境形状/尺寸。
+- `ur5e_drillgrasp_env_cfg.py`：`object_pool/ball_prob/ball_prob_ramp_steps/ball_radius/eval_shape` 字段
+  + 环境变量注入；`OBJECT_POOL=1` 时条件 spawn `ball_obj`（半径 `BALL_RADIUS`），并把 `reset_cube.func`
+  换为 `reset_object_pool`（同步清空 params）；`OBJECT_KIND` 必须 box。
+- `mdp/observations.py` / `rewards.py` / `termination.py`：全部改读当前激活物体
+  （surface_vector/surface_distance、提举/漂移/边界终止、thumb_face/_contact_alignment 池双分支）。
+- `scripts/rsl_rl/eval_final.py`：成功判据改读当前激活物体（非池模式逐位等价）。
+
+**验证（先回归、再基线）**：
+| 检查 | 结果 |
+|---|---|
+| 非池 cube 观测快照 vs 旧基线 | **bit-exact**（torch.equal=True） |
+| 非池 sphere 观测快照 vs Phase 1 | **bit-exact** |
+| 池 cube 强制：激活方块位置/观测 | 原点+(-0.14,0.18,0.78) ✓；观测差 0.0187（仅 RNG 位移引起的关节复位噪声） |
+| 池 ball 强制：球激活/方块停放 | 球在台面、方块在角落地面(0.03) ✓；观测差 0.0187 |
+| 池模式 v58 基线（100 集） | cube 强制 **100/100**（提 16.7cm）；ball 强制 **100/100**（提 20.3cm） |
+
+**自查中发现并修复**：① `reset_object_pool` 初版写位姿未叠加 `env.scene.env_origins`（多环境错位，
+方块落到 2m 外）；② 事件替换后旧 `params`（pose_range/velocity_range/asset_cfg）仍被校验；
+③ 停用物体放 z=-50 被地面半空间顶升（物理不稳）→ 改本环境角落地面；④ `eval_final` 成功判据
+直读 `cube_obj`（池-球模式误判 0%）→ 改读当前激活物体。
+
+**混合微调（进行中）**：v58（`model_23789`）+ `OBJECT_POOL=1 BALL_PROB=0.5 BALL_PROB_RAMP_STEPS=24000`
++ `DELAY_OBS_MAX=1 DELAY_ACT_MAX=1`，`--final`，2000 迭代（23800→25789，约 3.5h）。
+启动 3 分钟遇 Isaac/Omni `carb.tasking Mutex` 偶发断言（与 v55 播放同一已知问题；`logs/train_mixed_ft_crash1.log`），
+重启后稳定运行（`logs/train_mixed_ft.log`）。验收：训练后 cube/ball 各 200 集（≥90% / ≥85%）。
 
 ## 交付与版本索引（按用途排序）
 
