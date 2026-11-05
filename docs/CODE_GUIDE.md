@@ -1,7 +1,7 @@
 # UR5e + 16 自由度灵巧手抓取项目 · 代码详解（新人向）
 
 > 目标：第一次接触本项目的人，按本文顺序阅读，可以对照源码把 `env_cfg` 与 `mdp/` 全部读懂。
-> 版本基准：2026-10-19（`main @ 49c7fb6`）。文中路径均相对仓库根目录；行号不写死（会随版本变化），以"文件名 + 定义名"定位。
+> 版本基准：2026-11-05（`main`；Phase 2 对象池/一个权重已并入）。文中路径均相对仓库根目录；行号不写死（会随版本变化），以"文件名 + 定义名"定位。
 > 配套文档：`DEPLOY_INTERFACE.md`（真机接口）、`docs/PAPER_DRAFT.md`（论文草稿）、`CHECKPOINTS.md`（历史与结论索引）。
 
 ---
@@ -36,9 +36,10 @@ ur5e_drillgrasp/
 │           ├── observations.py         # 111 维观测项
 │           ├── rewards.py              # 奖励函数（§0–§4 分区；§4 为归档死代码）
 │           ├── curriculum.py           # 自动课程（信号 EMA + 10 个课程函数）
-│           ├── events.py               # 每集重置逻辑（关节/远起/预备位）
+│           ├── events.py               # 每集重置逻辑（关节/远起/预备位；Phase 2 对象池 reset）
 │           ├── termination.py          # 终止条件
 │           ├── object_geometry.py      # 形状抽象层（box/sphere；Phase 1）
+│           ├── object_pool.py          # 当前激活物体访问器（Phase 2 一个权重）
 │           ├── delay.py                # 延迟鲁棒化包装器（训练用）
 │           └── commands/drill_pose_command.py  # 目标位姿命令（当前 config 挂载但观测未用）
 ├── scripts/rsl_rl/                     # train / play / eval_final / eval_deploy / cli_args
@@ -262,8 +263,36 @@ TerminationManager：是否终止/超时（§9）
 - **sphere**：`SceneCfg` 的 spawn 换成球（质量 0.05kg），球心高度 = 0.75 + 半径；观测/奖励经
   `object_geometry.surface_distance/surface_vector` 自动走球面公式；`thumb_face_reach` 与
   `contact_alignment` 的对置轴改为"拇指→参考指尖"的水平方向（方块仍用 cube 局部 ±y）；
-- **限制**：当前一次进程只支持一种形状（便于分别训练/评测）。"一个权重同时抓多种形状"
-  需要"每环境形状 + 物体池"机制（Phase 2，尚未实现）。
+- **扩展**：进程级单形状用于分别训练/评测；"一个权重同时抓多种形状"由 Phase 2 对象池实现（见 §3.13）。
+
+### 3.13 对象池（Phase 2：一个权重，box+sphere）
+
+目标：**同一份权重**按回合抓取方块或球。核心是"每环境两件物体 + 逐集随机激活"。
+
+- **`mdp/object_pool.py`**：统一访问"当前激活物体"（`active_pos/active_quat/active_lin_vel/active_ang_vel/
+  surface_distance/surface_vector/is_ball/offset/enabled`）。关闭对象池时直接读 `cube_obj`（与原路径逐位等价）。
+- **`reset_object_pool`（`mdp/events.py`）**：替换 `reset_cube` 的 reset 事件；按 `BALL_PROB` 采样
+  （`EVAL_SHAPE` 可强制 cube/ball），激活物体放台面默认位、另一件放本环境角落地面，速度清零，并记录
+  `env._obj_is_ball/_obj_size`。`BALL_PROB_RAMP_STEPS` 按策略步渐进（重启会归零；混合训练可直接设 0）。
+- **配置**：`Ur5eDrillgraspEnvCfg` 增加 `object_pool/ball_prob/ball_prob_ramp_steps/ball_radius/eval_shape`；
+  `OBJECT_POOL=1` 时条件 spawn `ball_obj`（半径 `BALL_RADIUS`），并把 `reset_cube.func` 换成
+  `reset_object_pool`（同步清空 params）；此模式下 `OBJECT_KIND` 必须为 box。
+- **接线**：`observations.py`/`rewards.py`/`termination.py` 全部经对象池读当前物体；
+  `thumb_face_reach`/`contact_alignment` 池模式按 `is_ball` 分支（方块用立方体轴、球用拇指→参考指尖方向）；
+  `eval_final.py` 的成功/漂移判据也读当前物体。
+- **验证口径**：非池路径 `torch.equal` 逐位不变；池模式 `EVAL_SHAPE=cube/ball` 与 v58 基线一致
+  （快照差仅来自 RNG 位移的关节复位噪声 0.019）；验收见 CHECKPOINTS ㉕。
+
+```bash
+# 混合训练（v58 续训；球概率 50%）
+OBJECT_POOL=1 BALL_PROB=0.5 BALL_PROB_RAMP_STEPS=0 DELAY_OBS_MAX=1 DELAY_ACT_MAX=1 \
+python scripts/rsl_rl/train.py --task Template-Ur5e-Drillgrasp-v0 --headless --final \
+  --resume --load_run <run> --checkpoint <model.pt> --max_iterations 2000
+
+# 强制形状验收（各 200 集）
+OBJECT_POOL=1 EVAL_SHAPE=cube python scripts/rsl_rl/eval_final.py --checkpoint <v59.pt> --num_envs 200
+OBJECT_POOL=1 EVAL_SHAPE=ball python scripts/rsl_rl/eval_final.py --checkpoint <v59.pt> --num_envs 200
+```
 
 ### 3.11 EnvCfg 与任务注册
 
@@ -506,7 +535,7 @@ LIFT_FOUR = {"n": 0.0, "sigma": 0.05, "touch": 0.0, "touch_soft": 0.02}  # 贴�
 按 `mix` 比例把拇指预置到成功姿态（-0.70,-1.24,0.79,0.70）±0.05。当前 `mix=0` → 不改写（机制保留）。
 
 ### 8.5 cube 复位
-用 IsaacLab 的 `reset_root_state_uniform`，默认 `pose_range={}` → cube 每集精确回默认位。**`CUBE_POSE_RANGE` 环境变量**在 `apply_final_deploy_overrides` 里注入随机化（±半幅，x/y）。
+用 IsaacLab 的 `reset_root_state_uniform`，默认 `pose_range={}` → cube 每集精确回默认位。**`CUBE_POSE_RANGE` 环境变量**在 `apply_final_deploy_overrides` 里注入随机化（±半幅，x/y）。池模式下该事件被 `reset_object_pool` 替换（见 §3.13）。
 
 ---
 
