@@ -555,8 +555,19 @@ v58 源每 100（26 个）、DR 25650、消融 21770/21789、奖励消融评测�
 **冒烟**：64 env × 20 迭代（offset=240/ramp=960）：课程 15 项生效、池参数打印含 OFFSET、
 无 NaN、20 迭代正常（`logs/train_scratch_smoke.log`）。
 
-**状态（2026-11-06 16:56 启动）**：run 根 `ur5e_grasp_v60_scratch`，首个 run `2026-11-06_16-56-38`；
-看门狗 `logs/watch_v60.log`；启动 ~3min 时 iter 26/25000、课程 15 项、显存 6.2GB、无崩溃。
+**2026-11-06 自查修复（用户指出）**
+1. `anneal_lift_four` 的 `after_term` 有 **9 个前导空格**（`"         four_pose_ref"`），是 876990b
+   （Phase 2 提交）引入的回归（原为 `"four_pose_ref"`）。`after_term` 参与
+   `getattr(env, f"_cur_anneal_{after_term}_done")` 查找 → 带空格**永不匹配** → 从零课程
+   （不带 `--final`）中 `LIFT_FOUR.n` 恒为 0、四指贴近门全程不生效。**已修复**为 `"four_pose_ref"`。
+   - 影响范围：仅从零课程。v57 在 876990b 之前（正常）；v58/球专用/球延迟/v59 都用 `--final`
+     （`apply_final_deploy_overrides` 直接置 `LIFT_FOUR.n=4`），不受影响。
+   - 处置：v60 第 1 次（`2026-11-06_16-56-38`，iter 210）作废并移出实验根，修复后从零重启。
+2. `eval_deploy.py` 原先直读 `cube_obj`：池-球模式会测"停用的方块"（成功率假 0）。已改为
+   `object_pool.active_pos`（非池逐位等价），并新增 `--shape auto|cube|ball`（`ball` 自动
+   `OBJECT_POOL=1`）。验证结果补在本节。
+
+**状态（2026-11-06 16:56 首次启动，已作废；修复后重启中）**：run 根 `ur5e_grasp_v60_scratch`。
 中途评测点：6250 / 12500 / 18750 迭代（强制形状，暂停训练）。结果与偏差记录在本节。
 
 ## 交付与版本索引（按用途排序）

@@ -809,7 +809,7 @@ class CurriculumCfg:
             "require_k": 3,
             "gate_min_scale": 0.0,
             "pause_below": 0.35,
-            "after_term": "         four_pose_ref",   # [错开] S3 完成后再上贴近门
+            "after_term": "four_pose_ref",   # [错开] S3 完成后再上贴近门（2026-11-06 修复 9 空格回归）
         },
     )
     anneal_tip_progress = CurrTerm(

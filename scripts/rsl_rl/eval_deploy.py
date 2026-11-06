@@ -38,6 +38,7 @@ USD stage 会累积内存且实测卡死）。评估口径与 ``eval_final.py`` 
 
 import argparse
 import collections
+import os
 
 parser = argparse.ArgumentParser(description="部署条件评测 harness（策略侧注入真机不完美）")
 parser.add_argument("--task", type=str, default="Template-Ur5e-Drillgrasp-v0", help="任务名")
@@ -50,6 +51,8 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=100, help="评测环境数 = 集数（默认 100）")
 parser.add_argument("--steps", type=int, default=300, help="每集步数（默认 300 ≈ 10s@30Hz）")
 parser.add_argument("--scenario", type=str, default="all", help="all / baseline / 单项名 / custom")
+parser.add_argument("--shape", type=str, default="auto", choices=["auto", "cube", "ball"],
+                    help="物体：auto=沿用环境变量(默认非池方块)；cube=强制方块；ball=对象池强制球(自动 OBJECT_POOL=1)")
 parser.add_argument("--beta", type=float, default=None, help="动作低通系数（1.0=不过滤；越小越平滑）")
 parser.add_argument("--delay", type=int, default=0, help="观测延迟步数（0=无延迟）")
 parser.add_argument("--act-delay", type=int, default=0, help="动作延迟步数（命令晚 N 步生效；0=无）")
@@ -58,6 +61,12 @@ parser.add_argument("--noise-pos", type=float, default=0.0, help="关节位置�
 parser.add_argument("--noise-vel", type=float, default=0.0, help="关节速度观测噪声 σ（rad/s）")
 parser.add_argument("--seed", type=int, default=42, help="每个场景 reset 前的随机种子（保证各场景起点可比）")
 args_cli = parser.parse_args()
+# [v60] 形状选择：必须在 parse_env_cfg 之前注入环境变量
+if args_cli.shape == "cube":
+    os.environ["EVAL_SHAPE"] = "cube"
+elif args_cli.shape == "ball":
+    os.environ["OBJECT_POOL"] = "1"
+    os.environ["EVAL_SHAPE"] = "ball"
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
@@ -74,6 +83,7 @@ from rsl_rl.runners import OnPolicyRunner  # noqa: E402
 
 from ur5e_drillgrasp.tasks.manager_based.ur5e_drillgrasp.agents.rsl_rl_ppo_cfg import PPORunnerCfg  # noqa: E402
 from ur5e_drillgrasp.tasks.manager_based.ur5e_drillgrasp.mdp import rewards as R  # noqa: E402
+from ur5e_drillgrasp.tasks.manager_based.ur5e_drillgrasp.mdp import object_pool as P  # noqa: E402
 from ur5e_drillgrasp.tasks.manager_based.ur5e_drillgrasp.ur5e_drillgrasp_env_cfg import (  # noqa: E402
     apply_final_deploy_overrides,
 )
@@ -189,14 +199,15 @@ class DeployShim:
         return a
 
 
-def run_scenario(env, cube, policy, name: str, params: dict, N: int, T: int) -> dict:
+def run_scenario(env, policy, name: str, params: dict, N: int, T: int) -> dict:
     """单场景：reset → 施加注入跑 N 集 → 返回指标（环境/策略复用，避免重建 stage）。"""
     shim = DeployShim(policy, **params)
+    uw = env.unwrapped
 
     torch.manual_seed(args_cli.seed)  # 各场景起点对齐
     obs, _ = env.reset()
     shim.reset()
-    cp0 = cube.data.root_pos_w.clone()
+    cp0 = P.active_pos(uw).clone()  # [v60] 当前激活物体（非池 = cube_obj）
     device = env.unwrapped.device
 
     zmax = torch.zeros(N, device=device)
@@ -212,8 +223,9 @@ def run_scenario(env, cube, policy, name: str, params: dict, N: int, T: int) -> 
             a = shim(obs)
             obs, _, _, _ = env.step(a)
             fv = torch.norm(R._fingertip_force_vectors(env.unwrapped), dim=-1)
-            dz = cube.data.root_pos_w[:, 2] - cp0[:, 2]
-            dxy = torch.norm((cube.data.root_pos_w - cp0)[:, :2], dim=-1)
+            ppos = P.active_pos(uw)
+            dz = ppos[:, 2] - cp0[:, 2]
+            dxy = torch.norm((ppos - cp0)[:, :2], dim=-1)
             newly = (zmax < SUCCESS_HEIGHT) & (dz >= SUCCESS_HEIGHT)
             if newly.any():
                 d_at[newly] = dxy[newly]
@@ -274,6 +286,8 @@ def main():
     print("=" * 72, flush=True)
     print(f"部署条件评测（N={N}，每集 {T} 步，确定性策略，最终部署配置）", flush=True)
     print(f"  权重: {args_cli.checkpoint}", flush=True)
+    print(f"  形状: {args_cli.shape}（OBJECT_POOL={os.environ.get('OBJECT_POOL','0')}, "
+          f"EVAL_SHAPE={os.environ.get('EVAL_SHAPE','-')}）", flush=True)
     print("=" * 72, flush=True)
 
     # 环境与策略只建一次（见文件头"实现说明"）
@@ -283,13 +297,12 @@ def main():
     runner = OnPolicyRunner(env, PPORunnerCfg().to_dict(), log_dir=None, device="cuda:0")
     runner.load(args_cli.checkpoint)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
-    cube = env.unwrapped.scene["cube_obj"]
 
     results = []
     for name, params in todo:
         p_str = ", ".join(f"{k}={v}" for k, v in params.items()) if params else "无注入"
         print(f"\n── 场景 [{name}] ({p_str}) 运行中…", flush=True)
-        r = run_scenario(env, cube, policy, name, params, N, T)
+        r = run_scenario(env, policy, name, params, N, T)
         results.append(r)
         print(
             f"   成功率 {r['n_succ']}/{N} = {r['succ']:.1f}% | "
