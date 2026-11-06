@@ -172,7 +172,7 @@ def reset_arm_prepose(
 def reset_object_pool(env, env_ids, ball_radius: float | None = None) -> None:
     """[Phase 2] 每集为每个环境分配激活形状（cube/ball）并摆放两件物体。
 
-    - 形状：``EVAL_SHAPE=cube|ball`` 强制；否则按 ``BALL_PROB`` 采样（``BALL_PROB_RAMP_STEPS`` 可渐进）；
+    - 形状：``EVAL_SHAPE=cube|ball`` 强制；否则按 ``BALL_PROB`` 采样（``BALL_PROB_RAMP_STEPS`` 可渐进；续训用 ``BALL_RAMP_OFFSET_STEPS`` 补偏移），
     - 激活物体放台面默认位（cube：0.75+0.03；ball：0.75+r），另一件放本环境角落的地面；
     - 两件物体速度清零；形状/尺寸记录在 ``env._obj_is_ball`` / ``env._obj_size``。
     """
@@ -198,7 +198,10 @@ def reset_object_pool(env, env_ids, ball_radius: float | None = None) -> None:
         p = float(getattr(cfg, "ball_prob", 0.5))
         ramp = int(getattr(cfg, "ball_prob_ramp_steps", 0))
         if ramp > 0:
-            step = float(getattr(env, "common_step_counter", 0))
+            # 崩溃续训时由 BALL_RAMP_OFFSET_STEPS 补上已训策略步数（否则 ramp 归零）
+            step = float(getattr(env, "common_step_counter", 0)) + float(
+                getattr(cfg, "ball_ramp_offset_steps", 0)
+            )
             p = min(p, step / float(ramp))
         is_ball = torch.rand(n, device=dev) < p
 

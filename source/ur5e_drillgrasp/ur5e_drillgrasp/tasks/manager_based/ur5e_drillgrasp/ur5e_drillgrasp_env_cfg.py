@@ -1020,6 +1020,7 @@ class Ur5eDrillgraspEnvCfg(ManagerBasedRLEnvCfg):
     object_pool: bool = False
     ball_prob: float = 0.5
     ball_prob_ramp_steps: int = 0
+    ball_ramp_offset_steps: int = 0  # [v60] 崩溃续训时已训策略步数（ramp 不归零）
     ball_radius: float = 0.03
     eval_shape: str = ""
 
@@ -1047,6 +1048,7 @@ class Ur5eDrillgraspEnvCfg(ManagerBasedRLEnvCfg):
         self.object_pool = (_os.environ.get("OBJECT_POOL", "0") == "1")
         self.ball_prob = float(_os.environ.get("BALL_PROB", "0.5"))
         self.ball_prob_ramp_steps = int(_os.environ.get("BALL_PROB_RAMP_STEPS", "0"))
+        self.ball_ramp_offset_steps = int(_os.environ.get("BALL_RAMP_OFFSET_STEPS", "0"))
         self.ball_radius = float(_os.environ.get("BALL_RADIUS", "0.03"))
         self.eval_shape = (_os.environ.get("EVAL_SHAPE", "") or "").strip().lower()
         if self.object_pool:
@@ -1072,6 +1074,7 @@ class Ur5eDrillgraspEnvCfg(ManagerBasedRLEnvCfg):
             self.events.reset_cube.params = {}
             print(
                 f"[INFO] 对象池: BALL_PROB={self.ball_prob}, RAMP={self.ball_prob_ramp_steps}, "
-                f"BALL_RADIUS={self.ball_radius}, EVAL_SHAPE={self.eval_shape or '-'}",
+                f"OFFSET={self.ball_ramp_offset_steps}, BALL_RADIUS={self.ball_radius}, "
+                f"EVAL_SHAPE={self.eval_shape or '-'}",
                 flush=True,
             )
