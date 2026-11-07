@@ -93,12 +93,20 @@ def main():
     d_at = torch.full((N,), float("nan"), device=uw.device)  # 首达 8cm 时刻的 xy 漂移
     f_at = torch.zeros(N, device=uw.device)  # 首达 8cm 时刻的拇指力
     f4_at = torch.zeros(N, device=uw.device)  # 首达 8cm 时刻的四指最大力
+    # [严格口径] 首达 8cm 后 0.5s（15 步）内，力门控满足的步数占比
+    F_THR = 0.10          # N：拇指 / 四指max 力阈值
+    HOLD_STEPS = 15       # 0.5s @30Hz
+    cross_step = torch.full((N,), -1, dtype=torch.long, device=uw.device)
+    hold_ok = torch.zeros(N, device=uw.device)
+    hold_tot = torch.zeros(N, device=uw.device)
+    last_gate_ok = torch.zeros(N, dtype=torch.bool, device=uw.device)
 
     with torch.no_grad():
-        for _ in range(T):
+        for step_idx in range(T):
             a = policy(obs)
             obs, _, _, _ = env.step(a)
             fv = torch.norm(R._fingertip_force_vectors(uw), dim=-1)  # (N,5) 指尖力
+            gate_ok = (fv[:, 0] >= F_THR) & (fv[:, 1:].max(dim=1).values >= F_THR)
             ppos = P.active_pos(uw)
             dz = ppos[:, 2] - cp0[:, 2]
             dxy = torch.norm((ppos - cp0)[:, :2], dim=-1)
@@ -107,12 +115,22 @@ def main():
                 d_at[newly] = dxy[newly]
                 f_at[newly] = fv[newly, 0]
                 f4_at[newly] = fv[newly, 1:].max(dim=1).values
+                cross_step[newly] = step_idx
+            active = (cross_step >= 0) & ((step_idx - cross_step) < HOLD_STEPS)
+            if active.any():
+                hold_ok[active] += gate_ok[active].float()
+                hold_tot[active] += 1.0
+            last_gate_ok = gate_ok
             zmax = torch.maximum(zmax, dz)
             dmax = torch.maximum(dmax, dxy)
 
     lift = zmax * 100
     dr = dmax * 100
     succ = zmax >= SUCCESS_HEIGHT
+    hold_frac = torch.where(hold_tot > 0, hold_ok / hold_tot.clamp(min=1.0), torch.zeros_like(hold_ok))
+    succ_grasp = succ & (hold_tot > 0) & (hold_frac >= 0.8)
+    succ_strict = succ_grasp & (d_at <= 0.04)
+    held_end = succ & last_gate_ok
 
     print("=" * 64, flush=True)
     print(f"最终验收评测（N={N}，每集 {T} 步，确定性策略，最终部署配置）", flush=True)
@@ -139,6 +157,22 @@ def main():
         "（含提起后保持期）",
         flush=True,
     )
+    print(
+        f"  严格抓取成功: {int(succ_grasp.sum())}/{N} = {float(succ_grasp.float().mean()) * 100:.1f}%"
+        f"（提≥8cm + 首达后 0.5s 力门控≥80%，拇/四max≥{F_THR:.2f}N）",
+        flush=True,
+    )
+    print(
+        f"  严格+漂移   : {int(succ_strict.sum())}/{N} = {float(succ_strict.float().mean()) * 100:.1f}%"
+        "（再加首达漂移≤4cm）",
+        flush=True,
+    )
+    if succ.any():
+        print(
+            f"  持住期门控  : mean {float(hold_frac[succ].mean()) * 100:.0f}%"
+            f" / 末步仍持住 {int(held_end.sum())}/{int(succ.sum())}",
+            flush=True,
+        )
     env.close()
     sim.close()
 
