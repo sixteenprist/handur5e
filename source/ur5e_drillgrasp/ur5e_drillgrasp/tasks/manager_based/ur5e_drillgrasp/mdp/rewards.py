@@ -274,7 +274,9 @@ def _good_contact(
     four = mag[:, list(ACTIVE_FOUR_INDICES)]
     per = torch.sigmoid((four - thr) / soft)
     cnt = per.sum(dim=-1)
-    gate4 = torch.sigmoid((cnt - float(k)) / 0.5)
+    # k 可为 float（全局）或 (N,) 张量（按环境/形状设置，[2026-11-07] 球的 lift 门控 k=2）
+    kk = k if torch.is_tensor(k) else torch.as_tensor(float(k), device=env.device)
+    gate4 = torch.sigmoid((cnt - kk) / 0.5)
     gateT = torch.sigmoid((thumb - thr) / soft)
     return gateT * gate4
 
@@ -372,18 +374,33 @@ def _four_near_gate(env: ManagerBasedRLEnv, ema_alpha: float = 0.1) -> torch.Ten
             env._four_near_ema[rm] = s[rm]
     return torch.sigmoid((env._four_near_ema - (n_req - 0.5)) / 0.5)
 
-def _gate_k(env: ManagerBasedRLEnv) -> float:
+def _gate_k(env: ManagerBasedRLEnv):
     """从 contact_gate 项读"至少几根手指"k（默认 1.0）。
 
     [2026-10-15 校正] k 现为固定 1.0（"1→3"课程已废止；cfg contact_gate.k=1）。
     历史教训：contact_gate 与 lift 链曾口径不一 → 本函数保证两处同读一个来源。
+    [2026-11-07 v59 探针] 池模式球：k 提到 BALL_CONTACT_K（默认 2.0），迫使球>=2 指接触
+    才拿 lift 分（方块保持 base k）；返回 (N,) 张量，_good_contact 支持逐环境 k。
     """
     try:
         rm = env.reward_manager
         p = rm._term_cfgs[rm._term_names.index("contact_gate")].params
-        return float(p.get("k", 1.0))
+        base = float(p.get("k", 1.0))
     except Exception:  # noqa: BLE001
-        return 1.0
+        base = 1.0
+    try:
+        if _pool.enabled(env):
+            import os as _os
+            kb = float(_os.environ.get("BALL_CONTACT_K", "2.0"))
+            is_ball = _pool.is_ball(env)
+            return torch.where(
+                is_ball,
+                torch.full((env.num_envs,), kb, device=env.device),
+                torch.full((env.num_envs,), base, device=env.device),
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    return base
 
 def _gate_lift_params(env: ManagerBasedRLEnv) -> tuple[float, float]:
     """[v46 课程化] 提起门控参数（deadzone/scale）：全局 GATE_LIFT 单一来源，课程可渐变。
