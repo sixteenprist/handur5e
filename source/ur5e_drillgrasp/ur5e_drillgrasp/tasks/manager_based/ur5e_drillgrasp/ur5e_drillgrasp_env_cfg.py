@@ -272,6 +272,10 @@ class ObservationsCfg:
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = True
+            # [v60 蒸馏] 形状位（cube=0 / ball=1）：SHAPE_OBS=1 时追加为最后 1 维（111→112）
+            import os as _os
+            if (_os.environ.get("SHAPE_OBS", "0") or "0") == "1":
+                self.object_is_ball = ObsTerm(func=mdp.object_is_ball)
 
     @configclass
     class CriticCfg(ObsGroup):

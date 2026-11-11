@@ -20,6 +20,14 @@ from . import object_geometry as _objgeo  # [Phase 1] 形状抽象（box/sphere�
 from . import object_pool as _pool  # [Phase 2] 混合形状对象池
 
 
+def object_is_ball(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """(W) [v60 蒸馏] 当前物体是否为球：0/1，形状 (N,1)；非池模式恒 0（cube）。
+
+    仅在 SHAPE_OBS=1 时挂入 PolicyCfg；默认关闭以保持旧权重 111 维兼容。
+    """
+    return _pool.is_ball(env).float().unsqueeze(-1)
+
+
 # ══════════════════════════════════════════════════════════════
 # 常量
 # ══════════════════════════════════════════════════════════════

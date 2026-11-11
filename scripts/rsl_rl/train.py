@@ -44,6 +44,11 @@ parser.add_argument(
     default=False,
     help="[交付] 在自动课程末态=最终部署配置下训练/微调（关课程、门控终值、t2 自由、contact_gate 保持 k=1、thr→0.15）。",
 )
+# [v60 蒸馏] 形状条件学生的 BC 热启动（仅初次训练；--resume 时自动跳过）
+parser.add_argument("--bc_data", type=str, default=None, help="BC 数据 .pt（obs 112 / act 22）")
+parser.add_argument("--bc_epochs", type=int, default=0, help="BC 轮数（0=不启用）")
+parser.add_argument("--bc_lr", type=float, default=1e-3, help="BC Adam 学习率")
+parser.add_argument("--bc_batch", type=int, default=4096, help="BC batch 大小")
 args_cli, hydra_args = parser.parse_known_args()
 
 # always enable cameras to record video
@@ -255,6 +260,48 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             print(f"[INFO]: 优化器 lr 已按配置覆盖为 {agent_cfg.algorithm.learning_rate}")
         except Exception as _exc:  # noqa: BLE001
             print(f"[WARN]: 覆盖优化器 lr 失败（不影响运行，但 lr 可能沿用旧值）: {_exc}")
+
+    # [v60 蒸馏] BC 热启动：用方块/球专家的 (obs+形状位, act) 先监督训练 actor 均值
+    if args_cli.bc_data and args_cli.bc_epochs > 0 and not agent_cfg.resume:
+        import torch.nn.functional as F
+        _data = torch.load(args_cli.bc_data, map_location="cpu")
+        _obs = _data["obs"].float().to(agent_cfg.device)
+        _act = _data["act"].float().to(agent_cfg.device)
+        _actor = runner.alg.policy  # rsl_rl: PPO 的网络挂在 alg.policy（ActorCritic）
+        try:
+            _actor.actor_obs_normalizer.update(_obs)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[WARN] actor normalizer update 失败: {_e}")
+        _opt = torch.optim.Adam(_actor.actor.parameters(), lr=args_cli.bc_lr)
+        _N, _bs = _obs.shape[0], int(args_cli.bc_batch)
+        print(f"[BC] samples={_N} obs={tuple(_obs.shape)} act={tuple(_act.shape)} "
+              f"epochs={args_cli.bc_epochs} bs={_bs} lr={args_cli.bc_lr}", flush=True)
+        for _ep in range(args_cli.bc_epochs):
+            _perm = torch.randperm(_N, device=agent_cfg.device)
+            _tot = 0.0
+            for _i in range(0, _N, _bs):
+                _idx = _perm[_i:_i + _bs]
+                _pred = _actor.actor(_actor.actor_obs_normalizer(_obs[_idx]))
+                _loss = F.mse_loss(_pred, _act[_idx])
+                _opt.zero_grad(set_to_none=True)
+                _loss.backward()
+                _opt.step()
+                _tot += _loss.item() * _idx.numel()
+            if _ep == 0 or (_ep + 1) % 10 == 0 or _ep == args_cli.bc_epochs - 1:
+                print(f"[BC] epoch {_ep + 1}/{args_cli.bc_epochs} mse={_tot / _N:.6f}", flush=True)
+        # BC 后把探索噪声降到专家同档（否则 PPO 首轮 std=1.0 会破坏 BC 行为）
+        try:
+            with torch.no_grad():
+                if hasattr(_actor, "std") and _actor.std is not None:
+                    _actor.std.data.fill_(0.1)
+                elif hasattr(_actor, "log_std") and _actor.log_std is not None:
+                    import math as _math
+                    _actor.log_std.data.fill_(_math.log(0.1))
+            print("[BC] 探索噪声 std 初始化为 0.1", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[WARN] std 初始化失败: {_e}")
+        del _data, _obs, _act, _perm, _opt
+        torch.cuda.empty_cache()
 
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)

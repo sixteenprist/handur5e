@@ -609,6 +609,19 @@ v58 源每 100（26 个）、DR 25650、消融 21770/21789、奖励消融评测�
 - 下一步（方案 A，若探针失败）：形状位 1 维（obs 111→112）+ 持续夹持（门控≥10 步才给 lift 奖励）+
   从零 v60 + 严格验收；若仍不达标，用专家蒸馏/分工。
 
+**方案 1 实施：专家蒸馏（2026-11-11，进行中）**
+- **形状位**：`SHAPE_OBS=1` 时 PolicyCfg 追加 `object_is_ball`（cube=0/ball=1，obs 111→112）；
+  默认关闭，v58/球专用 111 维部署不受影响（冒烟：112/111）。
+- **专家数据**：`scripts/analysis/collect_distill_data.py` 采集 v58（方块）与球专用延迟鲁棒（球）
+  各 200 集×300 步 → `logs/distill/{cube,ball}.pt`，合并 `bc_data.pt`（12 万样本，形状位各半）。
+- **BC 热启动**：`train.py --bc_data/--bc_epochs/--bc_lr/--bc_batch`，在 PPO 前用专家 (obs+bit, act)
+  监督训练 actor 均值（拟合 actor 归一化；BC 后 std=0.1；`--resume` 自动跳过）。
+- **兼容修复**：`delay.py` 的观测环兜底维度从写死 111 改为读观测管理器（配合 112）。
+- **冒烟**：1 轮 BC（mse 0.732）→ 3 迭代 PPO，112 维/池/延迟/--final 正常。
+- **公式**：`SHAPE_OBS=1 OBJECT_POOL=1 BALL_PROB=0.5 BALL_CONTACT_K=2.0 DELAY_OBS_MAX=1 DELAY_ACT_MAX=1`
+  `--final --bc_data logs/distill/bc_data.pt --bc_epochs 100 --max_iterations 1500`；验收严格口径
+  方块 ≥90%、球 ≥85%（各 200 集）；run 根 `ur5e_grasp_v60_distill`。
+
 **状态（2026-11-06 首次启动已作废；2026-11-07 暂停等方案 A）**：run 根 `ur5e_grasp_v60_scratch`。
 中途评测点：6250 / 12500 / 18750 迭代（强制形状，暂停训练）。结果与偏差记录在本节。
 

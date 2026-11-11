@@ -67,6 +67,24 @@ class DelayVecEnvWrapper:
             self._act_ring = torch.zeros(n, self._L_act, act_dim, device=self._device)
             self._d_act = torch.zeros(n, dtype=torch.long, device=self._device)
 
+    def _policy_obs_dim(self) -> int:
+        """从观测管理器读取 policy 组实际维度（兼容 111/112 等；仅首次兜底用）。"""
+        try:
+            om = self._env.unwrapped.observation_manager
+            dims = om.group_obs_dim["policy"]
+            if isinstance(dims, (list, tuple)) and len(dims) and isinstance(dims[0], (list, tuple)):
+                n = 1
+                for d in dims:
+                    for v in d:
+                        n *= int(v)
+                return n
+            n = 1
+            for v in dims:
+                n *= int(v)
+            return n
+        except Exception:  # noqa: BLE001
+            return 111
+
     def _sample_delays(self, env_ids: torch.Tensor):
         if self.obs_max > 0:
             self._d_obs[env_ids] = torch.randint(0, self.obs_max + 1, (env_ids.numel(),), device=self._device)
@@ -90,11 +108,11 @@ class DelayVecEnvWrapper:
         return obs_td, extras
 
     def step(self, actions: torch.Tensor):
-        if self.obs_max > 0 and self._obs_ring is None:  # 防御：未 reset 直接 step
-            self._alloc(111, actions.shape[1])
+        if self.obs_max > 0 and self._obs_ring is None:  # 防御：未 reset 直接 step（训练循环 get_observations 起步）
+            self._alloc(self._policy_obs_dim(), actions.shape[1])
             self._d_obs[:] = 0
         if self.act_max > 0 and self._act_ring is None:
-            self._alloc(self._obs_dim or 111, actions.shape[1])
+            self._alloc(self._obs_dim or self._policy_obs_dim(), actions.shape[1])
             self._d_act[:] = 0
 
         self._t += 1
