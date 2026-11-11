@@ -301,6 +301,20 @@ OBJECT_POOL=1 EVAL_SHAPE=ball python scripts/rsl_rl/eval_final.py --checkpoint <
 
 ---
 
+### 3.14 v60 蒸馏（形状位 + BC）
+
+- `SHAPE_OBS=1`：PolicyCfg `__post_init__` 末尾追加 `object_is_ball`（cube=0/ball=1），policy obs **111→112**；
+  默认关闭，旧权重（v58/v59/球专用）仍 111 维。
+- `scripts/analysis/collect_distill_data.py`：从专家（v58 方块 / 球专用延迟鲁棒）采集 (obs, act)，
+  在 obs 末尾追加形状位 → `logs/distill/{cube,ball}.pt`（合并 `bc_data.pt`）。
+- `train.py`：`--bc_data/--bc_epochs/--bc_lr/--bc_batch` 在 PPO 前做 BC（拟合 actor 观测归一化；
+  保存 PPO 前的 `model_bc.pt`；std 初始 0.1；`--resume` 自动跳过）。BC-only 学生严格口径
+  方块/球各 200/200（单形状部署环境）。
+- 注意：池-球环境的重置分布与单形状球不一致（球专用专家在池-球也退化为推/滚），
+  球验收/部署用**单形状环境**；池混合训练前需先对齐重置分布。
+
+---
+
 ## 4. `mdp/observations.py`（观测项实现）
 
 该文件实现观测项与内部辅助函数（本任务配置用到其中 10 项），全部返回 `(num_envs, D)` 张量。重要常量：
