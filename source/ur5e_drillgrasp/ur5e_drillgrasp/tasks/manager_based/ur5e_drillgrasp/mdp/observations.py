@@ -25,6 +25,9 @@ def object_is_ball(env: ManagerBasedRLEnv) -> torch.Tensor:
 
     仅在 SHAPE_OBS=1 时挂入 PolicyCfg；默认关闭以保持旧权重 111 维兼容。
     """
+    if not _pool.enabled(env):
+        v = 0.0 if _objgeo.is_box() else 1.0  # 单形状模式：几何决定形状位
+        return torch.full((env.num_envs, 1), v, device=env.device)
     return _pool.is_ball(env).float().unsqueeze(-1)
 
 

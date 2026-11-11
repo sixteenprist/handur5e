@@ -300,6 +300,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             print("[BC] 探索噪声 std 初始化为 0.1", flush=True)
         except Exception as _e:  # noqa: BLE001
             print(f"[WARN] std 初始化失败: {_e}")
+        # 保存 BC 后、PPO 前的策略（诊断/可直接使用；PPO 的全新 critic 首轮更新可能破坏它）
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            runner.save(os.path.join(log_dir, "model_bc.pt"), 0)
+            print("[BC] 已保存 model_bc.pt（PPO 前）", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[WARN] model_bc.pt 保存失败: {_e}")
         del _data, _obs, _act, _perm, _opt
         torch.cuda.empty_cache()
 
