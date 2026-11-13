@@ -26,6 +26,7 @@ parser.add_argument("--num_envs", type=int, default=200)
 parser.add_argument("--steps", type=int, default=300)
 parser.add_argument("--radius", type=float, default=0.03)
 parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--augment", type=int, default=0, help="1=按部署扰动场景采集（延迟/滤波/限幅/噪声）")
 args_cli = parser.parse_args()
 
 # 专家使用 111 维单形状环境（形状位只在学生 env 打开）
@@ -56,6 +57,82 @@ from ur5e_drillgrasp.tasks.manager_based.ur5e_drillgrasp.ur5e_drillgrasp_env_cfg
 )
 
 
+# ── 与 eval_deploy.DeployShim 完全相同的扰动顺序：观测延迟/噪声 → 策略 → 低通 → 限幅 → 动作延迟 ──
+import collections  # noqa: E402
+
+N_POS, N_VEL = 26, 26  # obs 前 52 维 = 关节位置 26 + 关节速度 26
+
+
+class DeployShim:
+    def __init__(self, policy, beta=None, delay=0, rate_arm=None, noise_pos=0.0, noise_vel=0.0, act_delay=0):
+        self.policy, self.beta, self.delay, self.rate_arm = policy, beta, int(delay), rate_arm
+        self.act_delay, self.noise_pos, self.noise_vel = int(act_delay), float(noise_pos), float(noise_vel)
+        self._act_buf, self._hist, self._prev = [], None, None
+        self.debug_raw_action = None
+        self.debug_obs_use = None
+
+    def reset(self):
+        self._hist = collections.deque(maxlen=self.delay + 1) if self.delay > 0 else None
+        self._act_buf, self._prev = [], None
+
+    def __call__(self, obs):
+        t = obs["policy"]
+        if self._hist is not None:
+            self._hist.append(t.detach().clone())
+            obs_use = self._hist[0]
+        else:
+            obs_use = t
+        if self.noise_pos > 0.0 or self.noise_vel > 0.0:
+            obs_use = obs_use.clone()
+            if self.noise_pos > 0.0:
+                obs_use[:, 0:N_POS] += torch.randn_like(obs_use[:, 0:N_POS]) * self.noise_pos
+            if self.noise_vel > 0.0:
+                obs_use[:, N_POS:N_POS + N_VEL] += torch.randn_like(obs_use[:, N_POS:N_POS + N_VEL]) * self.noise_vel
+        self.debug_obs_use = obs_use.detach().clone()
+        if self._hist is not None or self.noise_pos > 0.0 or self.noise_vel > 0.0:
+            obs_td = obs.clone()
+            obs_td["policy"] = obs_use
+            a = self.policy(obs_td)
+        else:
+            a = self.policy(obs)
+        self.debug_raw_action = a.detach().clone()  # BC 目标=滤波/限幅/延迟之前的专家动作
+        if self._prev is None:
+            self._prev = a.detach().clone()
+        if self.beta is not None and self.beta < 1.0:
+            a = self.beta * a + (1.0 - self.beta) * self._prev
+        if self.rate_arm is not None:
+            a = a.clone()
+            d = (a[:, :6] - self._prev[:, :6]).clamp(-self.rate_arm, self.rate_arm)
+            a[:, :6] = self._prev[:, :6] + d
+        if self.act_delay > 0:
+            self._act_buf.append(a.detach().clone())
+            if len(self._act_buf) <= self.act_delay:
+                a = torch.zeros_like(a)
+            else:
+                a = self._act_buf.pop(0)
+        self._prev = a.detach().clone()
+        return a
+
+
+AUG_SCENARIOS = {
+    "clean": {},
+    "delay1": {"delay": 1},
+    "delay2": {"delay": 2},
+    "delay4": {"delay": 4},
+    "beta0.5": {"beta": 0.5},
+    "beta0.33": {"beta": 0.33},
+    "beta0.5_d1": {"beta": 0.5, "delay": 1},
+    "beta0.5_d2_noise": {"beta": 0.5, "delay": 2, "noise_pos": 0.002, "noise_vel": 0.01},
+    "beta0.5_d1_noise": {"beta": 0.5, "delay": 1, "noise_pos": 0.002, "noise_vel": 0.01},
+    "act1": {"act_delay": 1},
+    "act2": {"act_delay": 2},
+    "act1_b0.5": {"act_delay": 1, "beta": 0.5},
+    "act1_obs1": {"act_delay": 1, "delay": 1},
+    "rate1.5": {"rate_arm": 1.5},
+    "rate2.0": {"rate_arm": 2.0},
+}
+
+
 def main():
     N, T = args_cli.num_envs, args_cli.steps
     torch.manual_seed(args_cli.seed)
@@ -67,15 +144,29 @@ def main():
     runner.load(args_cli.checkpoint)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
-    obs, _ = env.reset()
     obs_buf, act_buf = [], []
-    with torch.no_grad():
-        for _ in range(T):
-            o = obs["policy"].detach().clone()
-            a = policy(obs)
-            obs_buf.append(o.cpu())
-            act_buf.append(a.detach().cpu())
-            obs, _, _, _ = env.step(a)
+    if args_cli.augment:
+        with torch.no_grad():
+            for i, (name, params) in enumerate(AUG_SCENARIOS.items()):
+                torch.manual_seed(args_cli.seed + 1000 * i)
+                obs, _ = env.reset()
+                shim = DeployShim(policy, **params)
+                shim.reset()
+                for _ in range(T):
+                    a = shim(obs)
+                    obs_buf.append(shim.debug_obs_use.cpu())
+                    act_buf.append(shim.debug_raw_action.cpu())
+                    obs, _, _, _ = env.step(a)
+                print(f"[collect] aug {name} done", flush=True)
+    else:
+        obs, _ = env.reset()
+        with torch.no_grad():
+            for _ in range(T):
+                o = obs["policy"].detach().clone()
+                a = policy(obs)
+                obs_buf.append(o.cpu())
+                act_buf.append(a.detach().cpu())
+                obs, _, _, _ = env.step(a)
     obs111 = torch.cat(obs_buf, dim=0)
     act = torch.cat(act_buf, dim=0)
     bit = torch.full((obs111.shape[0], 1), 1.0 if args_cli.shape == "ball" else 0.0)
