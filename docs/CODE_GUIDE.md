@@ -312,6 +312,9 @@ OBJECT_POOL=1 EVAL_SHAPE=ball python scripts/rsl_rl/eval_final.py --checkpoint <
   方块/球各 200/200（单形状部署环境）。
 - 注意：池-球环境的重置分布与单形状球不一致（球专用专家在池-球也退化为推/滚），
   球验收/部署用**单形状环境**；池混合训练前需先对齐重置分布。
+- **增广 BC（2026-11-13）**：`collect_distill_data.py --augment 1` 用 15 个部署扰动场景（延迟/滤波/限幅/噪声，
+  与 `eval_deploy.DeployShim` 同顺序）重采 90 万样本；BC 学生部署裕度达到专家天花板（方块 d4 94%/v58 92%；
+  球 d4 72%=专家、act1+β0.5 83%/专家 80%）。权重 `best/grasp_v60_distilled_aug.pt`；无需 PPO。
 
 ---
 
