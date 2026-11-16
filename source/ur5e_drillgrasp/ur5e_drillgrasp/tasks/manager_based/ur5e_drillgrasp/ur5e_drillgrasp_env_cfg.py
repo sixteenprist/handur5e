@@ -908,13 +908,18 @@ def apply_final_deploy_overrides(cfg) -> None:
     #   微调训练与鲁棒性评测共用同一开关；不设置时行为与之前完全一致。
     import os as _os
 
-    _pose_r = float(_os.environ.get("CUBE_POSE_RANGE", "0.0"))
+    # [2026-11-14] 球随机位姿：sphere 模式用 BALL_POSE_RANGE（x/y 半幅），方块仍用 CUBE_POSE_RANGE。
+    _kind = (_os.environ.get("OBJECT_KIND", "box") or "box").strip().lower()
+    _pose_r = float(_os.environ.get("BALL_POSE_RANGE", "0.0")) if _kind == "sphere" else float(
+        _os.environ.get("CUBE_POSE_RANGE", "0.0")
+    )
     if _pose_r > 0.0:
         cfg.events.reset_cube.params["pose_range"] = {
             "x": (-_pose_r, _pose_r),
             "y": (-_pose_r, _pose_r),
         }
-        print(f"[INFO] CUBE_POSE_RANGE={_pose_r}: cube 位置随机化 x/y ±{_pose_r}m/集")
+        _tag = "BALL" if _kind == "sphere" else "CUBE"
+        print(f"[INFO] {_tag}_POSE_RANGE={_pose_r}: 物体位置随机化 x/y ±{_pose_r}m/集")
     cfg.events.reset_arm_prepose.params["pose_scale"] = 0.0
     cfg.events.reset_arm_far.params["scale"] = 1.0
     cfg.actions.hand_action.frozen_channels = ()
